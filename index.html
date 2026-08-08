@@ -87,7 +87,7 @@
 <body>
 
 <div class="topline">
-  <div class="brand">Portfolio<em>Nebula</em> <span id="liveStatus" style="font-size:9px;color:var(--dim);font-weight:400">manual</span> <span style="font-size:9px;color:var(--dim);font-weight:400">v20</span></div>
+  <div class="brand">Portfolio<em>Nebula</em> <span id="liveStatus" style="font-size:9px;color:var(--dim);font-weight:400">manual</span> <span style="font-size:9px;color:var(--dim);font-weight:400">v21</span></div>
   <div class="tot"><b id="total">—</b> <span id="delta"></span></div>
 </div>
 
@@ -1259,7 +1259,9 @@ var LIVECFG=cfgLoad();
     if(q.get("wu")&&q.get("t")){
       LIVECFG.url=normUrl(q.get("wu")); LIVECFG.token=q.get("t").trim();
       cfgSave(LIVECFG);
-      history.replaceState(null,"",location.pathname);
+      /* deliberately KEEP the params in the URL: "Add to Home Screen" copies the
+         current URL, and iOS home-screen apps get their own empty storage — the
+         params re-configure the app on every launch, so the icon always goes live */
     }
   }catch(e){}
 })();
