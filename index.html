@@ -44,6 +44,13 @@
     background:rgba(10,14,22,.94); border:1px solid var(--border); border-radius:8px;
     padding:8px 10px; font-size:11px; line-height:1.5; max-width:240px; z-index:5;
   }
+  /* account value hero */
+  .alabel{font-size:9.5px;letter-spacing:1.6px;color:var(--dim);font-weight:700}
+  #acctVal{font-size:34px;font-weight:700;color:#e6edf3;letter-spacing:-1px;margin:3px 0 12px;font-variant-numeric:tabular-nums}
+  .astat{font-size:14px;font-weight:700;margin-top:3px;font-variant-numeric:tabular-nums}
+  .pot{background:#101725;border:1px solid var(--border);border-radius:10px;padding:10px 12px}
+  .pval{font-size:16px;font-weight:700;color:#e6edf3;margin-top:3px;font-variant-numeric:tabular-nums}
+  #spark{width:100%;height:44px;display:block;margin-top:8px}
   /* header strip */
   .topline{display:flex; justify-content:space-between; align-items:center; padding:12px 14px 0}
   .topline .brand{font-size:13px; font-weight:700; color:#e6edf3}
@@ -78,6 +85,28 @@
 <div class="topline">
   <div class="brand">Portfolio<em>Nebula</em> <span id="liveStatus" style="font-size:9px;color:var(--dim);font-weight:400">manual</span></div>
   <div class="tot"><b id="total">—</b> <span id="delta"></span></div>
+</div>
+
+<div class="card">
+  <div style="padding:14px">
+    <div class="alabel">ACCOUNT VALUE</div>
+    <div id="acctVal">—</div>
+    <div style="display:flex;gap:36px;margin-bottom:13px">
+      <div><div class="alabel">TODAY</div><div id="acct24" class="astat fl">—</div></div>
+      <div><div class="alabel">RATE OF RETURN</div><div id="acctRor" class="astat fl">—</div></div>
+    </div>
+    <div style="display:flex;gap:10px;flex-wrap:wrap">
+      <div class="pot" style="flex:1.5;min-width:175px">
+        <div class="alabel">INVESTMENTS</div>
+        <div id="acctInv" class="pval">—</div>
+        <canvas id="spark"></canvas>
+      </div>
+      <div style="flex:1;min-width:125px;display:flex;flex-direction:column;gap:10px">
+        <div class="pot" style="flex:1"><div class="alabel">CASH POT</div><div id="acctCash" class="pval">—</div></div>
+        <div class="pot" style="flex:1"><div class="alabel">BTC POT</div><div id="acctBtc" class="pval">—</div></div>
+      </div>
+    </div>
+  </div>
 </div>
 
 <div class="card">
@@ -259,11 +288,88 @@ function planetTexture(sym,r,c){
 
 /* ───────────────────────── header / table ───────────────────────── */
 var editing=false;
+/* ── ACCOUNT VALUE hero: totals, today's move, return %, pots, 24h sparkline ── */
+var ABKEY="tft-nebula-acctbase-v1", HKEY="tft-nebula-hist-v1";
+var AB=(function(){try{var s=localStorage.getItem(ABKEY);if(s)return JSON.parse(s);}catch(e){}return{d:"",v:0};})();
+var HIST=(function(){try{var s=localStorage.getItem(HKEY);if(s)return JSON.parse(s);}catch(e){}return[];})();
+function drawSpark(){
+  var sc=document.getElementById("spark");
+  if(!sc||!sc.getContext)return;
+  var dpr=Math.min((window.devicePixelRatio||1),2);
+  var w=sc.clientWidth||200,h=sc.clientHeight||44;
+  if(!w||!h)return;
+  sc.width=Math.round(w*dpr); sc.height=Math.round(h*dpr);
+  var g=sc.getContext("2d"); g.setTransform(dpr,0,0,dpr,0,0);
+  var cut=Date.now()-24*3600*1000;
+  var pts=HIST.filter(function(p){return p[0]>=cut;});
+  if(pts.length<2)return;
+  var lo=Infinity,hi=-Infinity;
+  pts.forEach(function(p){if(p[1]<lo)lo=p[1];if(p[1]>hi)hi=p[1];});
+  if(hi-lo<1){hi+=1;lo-=1;}
+  var pad=(hi-lo)*0.15; lo-=pad; hi+=pad;
+  var t0=pts[0][0], t1=pts[pts.length-1][0], span=Math.max(1,t1-t0);
+  var X=function(p){return (p[0]-t0)/span*(w-4)+2;};
+  var Y=function(p){return h-3-(p[1]-lo)/(hi-lo)*(h-6);};
+  /* faint vertical gridlines like the T212 card */
+  g.strokeStyle="rgba(140,170,220,0.10)"; g.lineWidth=1;
+  for(var gi=1;gi<5;gi++){ g.beginPath(); g.moveTo(w*gi/5,2); g.lineTo(w*gi/5,h-2); g.stroke(); }
+  /* soft under-glow */
+  var fillg=g.createLinearGradient(0,0,0,h);
+  fillg.addColorStop(0,"rgba(64,160,255,0.18)"); fillg.addColorStop(1,"rgba(64,160,255,0)");
+  g.beginPath(); g.moveTo(X(pts[0]),h-2);
+  pts.forEach(function(p){g.lineTo(X(p),Y(p));});
+  g.lineTo(X(pts[pts.length-1]),h-2); g.closePath();
+  g.fillStyle=fillg; g.fill();
+  /* the line */
+  g.strokeStyle="#3fa2ff"; g.lineWidth=2; g.lineJoin="round"; g.lineCap="round";
+  g.beginPath();
+  pts.forEach(function(p,i){ i?g.lineTo(X(p),Y(p)):g.moveTo(X(p),Y(p)); });
+  g.stroke();
+}
+function updateAcct(tot,pl){
+  var inv=0,cash=0,btc=0;
+  data.forEach(function(p){
+    if(p.grp==="cash")cash+=p.val;
+    else if(p.grp==="btc")btc+=p.val;
+    else inv+=p.val;
+  });
+  var e;
+  if(e=document.getElementById("acctVal")) e.textContent=fmt2(tot);
+  if(e=document.getElementById("acctInv")) e.textContent=fmt2(inv);
+  if(e=document.getElementById("acctCash")) e.textContent=fmt2(cash);
+  if(e=document.getElementById("acctBtc")) e.textContent=fmt2(btc);
+  /* today's move vs the day's first seen total */
+  var day=new Date().toDateString();
+  if(AB.d!==day||!AB.v){ AB={d:day,v:tot}; try{localStorage.setItem(ABKEY,JSON.stringify(AB));}catch(_){} }
+  var ch=tot-AB.v, chPct=AB.v?100*ch/AB.v:0;
+  if(e=document.getElementById("acct24")){
+    e.className="astat "+(Math.abs(ch)<0.005?"fl":(ch>=0?"up":"dn"));
+    e.textContent=(ch>=0?"↗ ":"↘ ")+"€"+Math.abs(ch).toLocaleString("en-IE",{minimumFractionDigits:2,maximumFractionDigits:2})+
+      " ("+(chPct>=0?"+":"−")+Math.abs(chPct).toFixed(2)+"%)";
+  }
+  /* rate of return: total unrealised P/L over cost */
+  var cost=tot-pl, ror=cost>0?100*pl/cost:0;
+  if(e=document.getElementById("acctRor")){
+    e.textContent=(ror>=0?"↗ +":"↘ −")+Math.abs(ror).toFixed(1)+"%";
+    e.className="astat "+(ror>=0?"up":"dn");
+  }
+  /* 24h history for the sparkline — one point per ≥5 min */
+  var now=Date.now();
+  if(!HIST.length||now-HIST[HIST.length-1][0]>=300000){
+    HIST.push([now,tot]);
+    var cut=now-25*3600*1000;
+    HIST=HIST.filter(function(p){return p[0]>=cut;});
+    if(HIST.length>400)HIST=HIST.slice(-400);
+    try{localStorage.setItem(HKEY,JSON.stringify(HIST));}catch(_){}
+  }
+  drawSpark();
+}
 function renderMeta(){
   var tot=0,pl=0; data.forEach(function(p){tot+=p.val; pl+=(p.pl||0);});
   document.getElementById("total").textContent=fmt(tot);
   var d=document.getElementById("delta");
   d.textContent=fmtSigned(pl); d.className=pl>=0?"up":"dn";
+  updateAcct(tot,pl);
 }
 var grpFilter="ALL";
 var GROUP_LABELS={core:"Core",comp:"Compounding",div:"Dividend",btc:"BTC",cash:"Cash",dip:"Dip buys",other:"Other"};
@@ -1050,7 +1156,7 @@ function sizeCanvas(){
   var H=Math.max(430,Math.min(window.innerHeight*0.62,680));
   cv.style.height=H+"px";
 }
-window.addEventListener("resize",function(){sizeCanvas(); nebUpdate();});
+window.addEventListener("resize",function(){sizeCanvas(); nebUpdate(); drawSpark();});
 
 /* ───────────── LIVE DATA: Trading212 via your Cloudflare Worker + BTC via CoinGecko ─────────────
    The Worker holds your read-only T212 API key; this page only knows the Worker URL
