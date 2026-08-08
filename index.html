@@ -76,7 +76,7 @@
 <body>
 
 <div class="topline">
-  <div class="brand">Portfolio<em>Nebula</em></div>
+  <div class="brand">Portfolio<em>Nebula</em> <span id="liveStatus" style="font-size:9px;color:var(--dim);font-weight:400">manual</span></div>
   <div class="tot"><b id="total">—</b> <span id="delta"></span></div>
 </div>
 
@@ -100,8 +100,15 @@
 <div class="card">
   <div class="card-head"><h3>Holdings</h3>
     <div class="btnrow" style="padding:0">
-      <button id="editBtn">Edit</button><button id="ioBtn">Backup</button>
+      <button id="editBtn">Edit</button><button id="ioBtn">Backup</button><button id="liveBtn">Live</button>
     </div>
+  </div>
+  <div id="livePanel" style="display:none; padding:4px 14px 12px; font-size:11px; color:var(--muted); line-height:2">
+    Worker URL <input type="text" id="cfgUrl" placeholder="https://your-worker.workers.dev" style="width:100%;background:#05080f;color:var(--text);border:1px solid var(--border);border-radius:6px;padding:5px 8px;font-family:inherit;font-size:11px"><br>
+    Access token <input type="text" id="cfgTok" placeholder="APP_TOKEN" style="width:60%;background:#05080f;color:var(--text);border:1px solid var(--border);border-radius:6px;padding:5px 8px;font-family:inherit;font-size:11px">
+    &nbsp;BTC qty <input type="number" id="cfgBtc" step="0.00000001" style="width:110px;background:#05080f;color:var(--text);border:1px solid var(--border);border-radius:6px;padding:5px 8px;font-family:inherit;font-size:11px;text-align:right"><br>
+    <button id="cfgSave" class="primary">Save &amp; go live</button>
+    <span id="cfgMsg" style="margin-left:8px"></span>
   </div>
   <table id="tbl"></table>
   <textarea id="ioArea" spellcheck="false"></textarea>
@@ -135,7 +142,8 @@
 "use strict";
 /* ───────────────────────── data ───────────────────────── */
 var GROUPS = {
-  core:{label:"CORE"}, comp:{label:"COMP"}, div:{label:"DIV"}, btc:{label:"BTC"}, cash:{label:"CASH"}
+  core:{label:"CORE"}, comp:{label:"COMP"}, div:{label:"DIV"}, btc:{label:"BTC"}, cash:{label:"CASH"},
+  dip:{label:"DIP"}, other:{label:"OTHER"}
 };
 var DEFAULT = [
   {id:"VWCE", name:"Vanguard FTSE All-World",  grp:"core", val:3383, pl:207},
@@ -707,7 +715,97 @@ function sizeCanvas(){
   cv.style.height=H+"px";
 }
 window.addEventListener("resize",function(){sizeCanvas(); nebUpdate();});
+
+/* ───────────── LIVE DATA: Trading212 via your Cloudflare Worker + BTC via CoinGecko ─────────────
+   The Worker holds your read-only T212 API key; this page only knows the Worker URL
+   and a shared access token. Nothing here can trade. */
+var CFGKEY="tft-nebula-livecfg-v1";
+function cfgLoad(){ try{var s=localStorage.getItem(CFGKEY); if(s) return JSON.parse(s);}catch(e){}
+  return {url:"",token:"",btcQty:0.00176307,btcCost:100}; }
+function cfgSave(c){ try{ localStorage.setItem(CFGKEY, JSON.stringify(c)); }catch(e){} }
+var LIVECFG=cfgLoad();
+
+/* T212 ticker prefix → app id (checked in order; first startsWith wins) */
+var TICKMAP=[
+  ["VWCE","VWCE","core"],["IS3N","IS3N","core"],
+  ["MSF","MSFT","comp"],["3V64","V","comp"],["ABEA","GOOGL","comp"],
+  ["MHL","SPGI","comp"],["TSFA","TSM","comp"],
+  ["REN","RELX","div"],["JNJ","JNJ","div"],["4AB","ABBV","div"],
+  ["MC","LVMH","dip"]
+];
+function mapTicker(t){
+  for(var i=0;i<TICKMAP.length;i++) if(t.indexOf(TICKMAP[i][0])===0) return TICKMAP[i];
+  return null;
+}
+var liveOK=false;
+function setStatus(txt,ok){
+  var el=document.getElementById("liveStatus");
+  el.textContent=txt; el.style.color=ok?"var(--green)":"var(--dim)";
+}
+function upsert(id,fields){
+  var p=data.find(function(x){return x.id===id;});
+  if(!p){ p={id:id,name:fields.name||id,grp:fields.grp||"other",val:0,pl:0}; data.push(p); }
+  if(fields.val!=null)p.val=fields.val;
+  if(fields.pl!=null)p.pl=fields.pl;
+  if(fields.name)p.name=fields.name;
+  return p;
+}
+function applyLive(j){
+  if(!j||!j.positions)return;
+  j.positions.forEach(function(pos){
+    var m=mapTicker(pos.ticker||"");
+    var val=(pos.quantity||0)*(pos.currentPrice||0);
+    var pl=(pos.ppl||0)+(pos.fxPpl||0);
+    if(m){ upsert(m[1],{val:val,pl:pl,grp:m[2]}); }
+    else { upsert((pos.ticker||"?").replace(/_.*/,""),{val:val,pl:pl,grp:"other",name:pos.ticker}); }
+  });
+  if(j.cash&&j.cash.free!=null) upsert("CASH",{val:j.cash.free,grp:"cash"});
+  renderMeta(); renderTable(); nebUpdate();
+}
+function pollT212(){
+  if(!LIVECFG.url||!LIVECFG.token){ setStatus("manual",false); return; }
+  var u=LIVECFG.url.replace(/\/+$/,"")+"/portfolio?t="+encodeURIComponent(LIVECFG.token);
+  fetch(u).then(function(r){ if(!r.ok) throw new Error("HTTP "+r.status); return r.json(); })
+    .then(function(j){
+      applyLive(j); liveOK=true;
+      var ts=new Date(); setStatus("LIVE "+ts.toTimeString().slice(0,8),true);
+    })
+    .catch(function(e){ liveOK=false; setStatus("live error — using last data",false); });
+}
+function pollBTC(){
+  fetch("https://api.coingecko.com/api/v3/simple/price?ids=bitcoin&vs_currencies=eur")
+    .then(function(r){return r.json();})
+    .then(function(j){
+      var px=j&&j.bitcoin&&j.bitcoin.eur; if(!px)return;
+      var v=LIVECFG.btcQty*px;
+      upsert("BTC",{val:v,pl:v-LIVECFG.btcCost,grp:"btc"});
+      renderMeta(); renderTable(); nebUpdate();
+    }).catch(function(e){});
+}
+/* Live settings panel */
+document.getElementById("liveBtn").addEventListener("click",function(){
+  var p=document.getElementById("livePanel");
+  var show=p.style.display!=="block";
+  p.style.display=show?"block":"none";
+  if(show){
+    document.getElementById("cfgUrl").value=LIVECFG.url;
+    document.getElementById("cfgTok").value=LIVECFG.token;
+    document.getElementById("cfgBtc").value=LIVECFG.btcQty;
+  }
+});
+document.getElementById("cfgSave").addEventListener("click",function(){
+  LIVECFG.url=document.getElementById("cfgUrl").value.trim();
+  LIVECFG.token=document.getElementById("cfgTok").value.trim();
+  var q=parseFloat(document.getElementById("cfgBtc").value); if(!isNaN(q)&&q>=0)LIVECFG.btcQty=q;
+  cfgSave(LIVECFG);
+  document.getElementById("cfgMsg").textContent="saved — polling…";
+  pollT212(); pollBTC();
+});
+setInterval(pollT212,30000);
+setInterval(pollBTC,60000);
+
 sizeCanvas(); renderMeta(); renderTable(); nebUpdate(); requestAnimationFrame(nebRender);
+pollT212(); pollBTC();
 })();
 </script>
 </body>
