@@ -336,6 +336,40 @@ document.getElementById("ioBtn").addEventListener("click",function(){
    Hierarchy: STRATEGIES are suns; HOLDINGS orbit their sun as planets.
    Sun size = strategy total; planet size = position value; planet color = P/L. */
 var _neb={nodes:{}, stars:[], t:0, prevTs:0, W:0, H:0, pulses:[]};
+/* #6 parallax: gyroscope on iPhone, pointer on desktop */
+var _par={x:0,y:0,tx:0,ty:0,gyro:false};
+function parTilt(e){
+  if(e.gamma==null&&e.beta==null)return;
+  _par.gyro=true;
+  _par.tx=Math.max(-1,Math.min(1,(e.gamma||0)/28));
+  _par.ty=Math.max(-1,Math.min(1,((e.beta||0)-45)/28));
+}
+window.addEventListener("deviceorientation",parTilt);
+if(typeof DeviceOrientationEvent!=="undefined"&&typeof DeviceOrientationEvent.requestPermission==="function"){
+  var askTilt=function(){
+    try{ DeviceOrientationEvent.requestPermission().then(function(s){
+      if(s==="granted")window.addEventListener("deviceorientation",parTilt);
+    }).catch(function(){}); }catch(_){}
+    document.removeEventListener("pointerdown",askTilt);
+  };
+  document.addEventListener("pointerdown",askTilt);
+}
+/* #8 market-hours sky */
+var _sky={k:1,open:true,last:-1};
+function marketOpen(){
+  function inWin(tz,sh,sm,eh,em){
+    try{
+      var parts=new Intl.DateTimeFormat("en-GB",{timeZone:tz,hour:"2-digit",minute:"2-digit",weekday:"short",hour12:false}).formatToParts(new Date());
+      var o={}; parts.forEach(function(x){o[x.type]=x.value;});
+      if(o.weekday==="Sat"||o.weekday==="Sun")return false;
+      var mins=parseInt(o.hour,10)*60+parseInt(o.minute,10);
+      return mins>=sh*60+sm && mins<eh*60+em;
+    }catch(e){ return true; }
+  }
+  return inWin("Europe/Berlin",9,0,17,30)||inWin("America/New_York",9,30,16,0);
+}
+/* #7 fog hues per strategy system */
+var FOGHUES={core:"64,190,255",comp:"120,110,255",div:"63,185,120",btc:"255,170,60",cash:"140,160,190",dip:"255,196,0",other:"190,120,255"};
 function addPulse(id,delta){
   if(Math.abs(delta)<0.01)return;
   _neb.pulses.push({id:id,t0:_neb.t,delta:delta});
@@ -350,6 +384,7 @@ function initStars(W,H){
   var n=Math.round(Math.max(110,Math.min(320,(W*H)/3400)));
   _neb.stars=Array.from({length:n},function(){return{
     x:Math.random()*W, y:Math.random()*H, r:0.3+Math.random()*1.1,
+    z:0.25+Math.random()*0.75,
     base:0.06+Math.random()*0.28, phase:Math.random()*Math.PI*2,
     freq:0.0003+Math.random()*0.0009};});
 }
@@ -448,6 +483,7 @@ function nebUpdate(){
         var m=_neb.nodes[pid];
         if(m.alpha>0.5) addPulse(pid, p.val-m.val);
         m.tScore=ps;m.tR=pr;m.tOR=oR;m.tAlpha=1;m.val=p.val;m.pl=p.pl||0;m.sun=sid;m.name=p.name;
+        m.move=p.movePct||0;
       }
     });
   });
@@ -489,11 +525,31 @@ function nebRender(){
   ctx.setTransform(dpr,0,0,dpr,0,0);
   initStars(W,H);
   ctx.fillStyle="#05080f"; ctx.fillRect(0,0,W,H);
+  /* #8: sky brightness follows Xetra/NYSE hours (re-checked every 15s, gentle fade) */
+  if(_sky.last<0||t-_sky.last>15000){ _sky.last=t; _sky.open=marketOpen(); }
+  _sky.k+=((_sky.open?1:0)-_sky.k)*(1-Math.pow(0.999,dt));
+  var bm=0.55+0.5*_sky.k;
+  /* #6: ease parallax toward tilt/pointer target */
+  var pf=1-Math.pow(0.96,dt/16.67);
+  _par.x+=(_par.tx-_par.x)*pf; _par.y+=(_par.ty-_par.y)*pf;
   _neb.stars.forEach(function(s){
-    var a=s.base*(0.55+0.45*Math.sin(t*s.freq+s.phase));
-    ctx.beginPath(); ctx.arc(s.x,s.y,s.r,0,6.283);
+    var a=s.base*(0.55+0.45*Math.sin(t*s.freq+s.phase))*bm;
+    ctx.beginPath(); ctx.arc(s.x+_par.x*20*s.z,s.y+_par.y*20*s.z,s.r*(0.7+0.3*s.z),0,6.283);
     ctx.fillStyle="rgba(180,205,255,"+a+")"; ctx.fill();
   });
+  /* #8: night sky gets a crescent moon when both exchanges sleep */
+  if(_sky.k<0.6){
+    var ma=(0.6-_sky.k)/0.6*0.55;
+    var mx0=W-44+_par.x*6, my0=38+_par.y*6, mr0=12;
+    var mgl=ctx.createRadialGradient(mx0,my0,mr0*0.3,mx0,my0,mr0*3);
+    mgl.addColorStop(0,"rgba(220,230,255,"+(ma*0.25)+")");
+    mgl.addColorStop(1,"rgba(220,230,255,0)");
+    ctx.fillStyle=mgl; ctx.beginPath(); ctx.arc(mx0,my0,mr0*3,0,6.283); ctx.fill();
+    ctx.save(); ctx.globalAlpha=ma;
+    ctx.beginPath(); ctx.arc(mx0,my0,mr0,0,6.283); ctx.fillStyle="rgba(225,232,246,0.92)"; ctx.fill();
+    ctx.beginPath(); ctx.arc(mx0-mr0*0.45,my0-mr0*0.18,mr0*0.94,0,6.283); ctx.fillStyle="#05080f"; ctx.fill();
+    ctx.restore();
+  }
   var lf=1-Math.pow(0.965,dt/16.67);
   var nodes=Object.values(_neb.nodes);
   var planets=nodes.filter(function(n){return n.isPlanet;});
@@ -516,10 +572,36 @@ function nebRender(){
     n.r=lerp(n.r,n.tR,lf);
     n.oR=lerp(n.oR,n.tOR||n.oR,lf);
     n.alpha=lerp(n.alpha,n.tAlpha,lf*0.4);
-    n.oAngle+=n.oSpeed*dt;
+    /* #10: flick boost decays; orbit speeds up briefly after a flick */
+    if(n.boost){ n.boost*=Math.pow(0.9965,dt); if(n.boost<0.02)n.boost=0; }
+    n.oAngle+=n.oSpeed*(1+(n.boost||0)*6)*dt;
+    /* #10: post-release velocity carries the planet, the orbit lerp springs it back */
+    if(n.vx||n.vy){
+      n.x+=n.vx*dt; n.y+=n.vy*dt;
+      n.vx*=Math.pow(0.988,dt); n.vy*=Math.pow(0.988,dt);
+      if(Math.abs(n.vx)<0.002&&Math.abs(n.vy)<0.002){n.vx=0;n.vy=0;}
+    }
     var pl=_neb.nodes[n.sun];
-    if(pl){ n.x=lerp(n.x,pl.x+n.oR*Math.cos(n.oAngle),0.22);
-            n.y=lerp(n.y,pl.y+n.oR*Math.sin(n.oAngle),0.22); }
+    if(pl&&!n.dragging){
+      n.x=lerp(n.x,pl.x+n.oR*Math.cos(n.oAngle),0.22);
+      n.y=lerp(n.y,pl.y+n.oR*Math.sin(n.oAngle),0.22);
+    }
+  });
+
+  /* #7: nebula fog — soft drifting colour clouds behind each strategy system */
+  planets.forEach(function(n){
+    if(!n.isSun||n.alpha<0.05)return;
+    var hue=FOGHUES[n.grp]||"90,140,255";
+    for(var fi=0;fi<3;fi++){
+      var fx=n.x+Math.sin(t*0.00006*(fi+1)+n.driftPX+fi*2.1)*n.r*(1.2+fi*0.55)+_par.x*(6+fi*3);
+      var fy=n.y+Math.cos(t*0.00005*(fi+1)+n.driftPY+fi*1.7)*n.r*(1.0+fi*0.45)+_par.y*(6+fi*3);
+      var fr=n.r*(2.6+fi*1.3);
+      var fg=ctx.createRadialGradient(fx,fy,0,fx,fy,fr);
+      fg.addColorStop(0,"rgba("+hue+","+(n.alpha*0.055)+")");
+      fg.addColorStop(0.6,"rgba("+hue+","+(n.alpha*0.028)+")");
+      fg.addColorStop(1,"rgba("+hue+",0)");
+      ctx.fillStyle=fg; ctx.beginPath(); ctx.arc(fx,fy,fr,0,6.283); ctx.fill();
+    }
   });
 
   /* faint orbit guides around each sun */
@@ -530,6 +612,21 @@ function nebRender(){
     ctx.strokeStyle="rgba(140,170,220,0.8)"; ctx.lineWidth=0.6;
     ctx.beginPath(); ctx.arc(pl.x,pl.y,n.oR,0,6.283); ctx.stroke();
     ctx.restore();
+  });
+  /* #9: orbit trails — long-exposure arcs fading behind each planet's motion */
+  moons.forEach(function(n){
+    if(n.alpha<0.12||n.dragging)return;
+    var pl=_neb.nodes[n.sun]; if(!pl)return;
+    var dir=n.oSpeed>=0?1:-1, span=0.85*(1+(n.boost||0)), SEG=4;
+    for(var si=0;si<SEG;si++){
+      var aa=n.oAngle-dir*span*(si+1)/SEG, ab=n.oAngle-dir*span*(si+0.08)/SEG;
+      ctx.save(); ctx.globalAlpha=n.alpha*0.15*(1-si/SEG);
+      ctx.strokeStyle=nebRGBA(n.score,1);
+      ctx.lineWidth=Math.max(0.8,n.r*0.18)*(1-si/SEG*0.65);
+      ctx.lineCap="round";
+      ctx.beginPath(); ctx.arc(pl.x,pl.y,n.oR,Math.min(aa,ab),Math.max(aa,ab)); ctx.stroke();
+      ctx.restore();
+    }
   });
 
   /* gold tether */
@@ -655,6 +752,41 @@ function nebRender(){
   moons.forEach(function(n){
     if(n.alpha<0.02)return;
     var abs=Math.abs(n.score); var c=nebRGB(n.score);
+    /* comet tail: appears when today's move exceeds 2%, length grows with the move.
+       Tail points away from the sun, like a real comet. */
+    if(n.move&&Math.abs(n.move)>=2){
+      var pl2=_neb.nodes[n.sun];
+      if(pl2){
+        var ang2=Math.atan2(n.y-pl2.y,n.x-pl2.x);
+        var k2=Math.min(1,(Math.abs(n.move)-2)/4);
+        var len=n.r*(2.4+3.6*k2);
+        var tc=n.move>0?"63,185,80":"248,81,73";
+        ctx.save();
+        ctx.translate(n.x,n.y); ctx.rotate(ang2);
+        var flick=0.85+0.15*Math.sin(t*0.004+n.oAngle*3);
+        var tg=ctx.createLinearGradient(0,0,len,0);
+        tg.addColorStop(0,"rgba("+tc+","+(n.alpha*0.45*flick)+")");
+        tg.addColorStop(0.5,"rgba("+tc+","+(n.alpha*0.18*flick)+")");
+        tg.addColorStop(1,"rgba("+tc+",0)");
+        ctx.fillStyle=tg;
+        ctx.beginPath();
+        ctx.moveTo(n.r*0.2,-n.r*0.8);
+        ctx.quadraticCurveTo(len*0.55,-n.r*0.35,len,0);
+        ctx.quadraticCurveTo(len*0.55,n.r*0.35,n.r*0.2,n.r*0.8);
+        ctx.closePath(); ctx.fill();
+        /* bright inner streak */
+        var tg2=ctx.createLinearGradient(0,0,len*0.7,0);
+        tg2.addColorStop(0,"rgba(255,255,255,"+(n.alpha*0.35*flick)+")");
+        tg2.addColorStop(1,"rgba(255,255,255,0)");
+        ctx.fillStyle=tg2;
+        ctx.beginPath();
+        ctx.moveTo(n.r*0.2,-n.r*0.3);
+        ctx.quadraticCurveTo(len*0.4,-n.r*0.1,len*0.7,0);
+        ctx.quadraticCurveTo(len*0.4,n.r*0.1,n.r*0.2,n.r*0.3);
+        ctx.closePath(); ctx.fill();
+        ctx.restore();
+      }
+    }
     if(abs>0.22){
       var gl=ctx.createRadialGradient(n.x,n.y,0,n.x,n.y,n.r*2.8);
       gl.addColorStop(0,"rgba("+c[0]+","+c[1]+","+c[2]+","+(n.alpha*0.50)+")");
@@ -853,12 +985,49 @@ document.getElementById("chartClose").addEventListener("click",function(){
   modal.style.display="none";
   document.getElementById("tvContainer").innerHTML="";
 });
+/* #10: touch physics — drag a planet and it springs back; flick it and its orbit
+   speeds up briefly. A clean tap (no drag) still opens the chart. */
+cv.style.touchAction="pan-y pinch-zoom";
+var _drag=null;
 cv.addEventListener("pointerdown",function(e){
   var r=cv.getBoundingClientRect();
   var mx=e.clientX-r.left,my=e.clientY-r.top;
   var best=hitNode(mx,my);
-  if(best&&!best.isSun&&TVMAP[best.sym]){ tt.style.opacity="0"; openChart(best.sym,best.name); }
-  else showTT(mx,my);
+  _drag={node:best,sx:mx,sy:my,moved:false,lx:mx,ly:my,lt:performance.now(),vx:0,vy:0};
+  if(best&&best.isOrb){ try{cv.setPointerCapture(e.pointerId);}catch(_){} }
+});
+cv.addEventListener("pointermove",function(e){
+  if(!_drag||!_drag.node||!_drag.node.isOrb)return;
+  var r=cv.getBoundingClientRect();
+  var mx=e.clientX-r.left,my=e.clientY-r.top;
+  if(!_drag.moved&&Math.hypot(mx-_drag.sx,my-_drag.sy)>7)_drag.moved=true;
+  if(_drag.moved){
+    var now2=performance.now(),dt2=Math.max(1,now2-_drag.lt);
+    _drag.vx=(mx-_drag.lx)/dt2; _drag.vy=(my-_drag.ly)/dt2;
+    _drag.lx=mx;_drag.ly=my;_drag.lt=now2;
+    var n=_drag.node; n.dragging=true; n.x=mx; n.y=my;
+    tt.style.opacity="0";
+    if(e.cancelable)e.preventDefault();
+  }
+});
+cv.addEventListener("pointerup",function(e){
+  var r=cv.getBoundingClientRect();
+  var mx=e.clientX-r.left,my=e.clientY-r.top;
+  if(_drag&&_drag.node&&_drag.node.isOrb&&_drag.moved){
+    var n=_drag.node; n.dragging=false;
+    n.vx=Math.max(-0.55,Math.min(0.55,_drag.vx));
+    n.vy=Math.max(-0.55,Math.min(0.55,_drag.vy));
+    n.boost=Math.min(2.5,(n.boost||0)+Math.hypot(_drag.vx,_drag.vy)*4);
+  }else{
+    var best=(_drag&&_drag.node)||hitNode(mx,my);
+    if(best&&!best.isSun&&TVMAP[best.sym]){ tt.style.opacity="0"; openChart(best.sym,best.name); }
+    else showTT(mx,my);
+  }
+  _drag=null;
+});
+cv.addEventListener("pointercancel",function(){
+  if(_drag&&_drag.node)_drag.node.dragging=false;
+  _drag=null;
 });
 
 function sizeCanvas(){
@@ -900,6 +1069,20 @@ function mapTicker(t){
   for(var i=0;i<TICKMAP.length;i++) if(t.indexOf(TICKMAP[i][0])===0) return TICKMAP[i];
   return null;
 }
+/* daily baseline for comet tails: first live value seen each calendar day */
+var BASEKEY="tft-nebula-base-v1";
+function loadBase(){ try{var s=localStorage.getItem(BASEKEY); if(s) return JSON.parse(s);}catch(e){} return {d:"",v:{}}; }
+function saveBase(){ try{ localStorage.setItem(BASEKEY, JSON.stringify(BASE)); }catch(e){} }
+var BASE=loadBase();
+function movePctFor(id,val){
+  var d=new Date().toDateString();
+  if(BASE.d!==d){ BASE={d:d,v:{}}; }
+  if(BASE.v[id]==null && val>0){ BASE.v[id]=val; saveBase(); }
+  var b=BASE.v[id];
+  if(!b||b<=0)return 0;
+  return (val-b)/b*100;
+}
+
 var liveOK=false;
 function setStatus(txt,ok){
   var el=document.getElementById("liveStatus");
@@ -908,7 +1091,7 @@ function setStatus(txt,ok){
 function upsert(id,fields){
   var p=data.find(function(x){return x.id===id;});
   if(!p){ p={id:id,name:fields.name||id,grp:fields.grp||"other",val:0,pl:0}; data.push(p); }
-  if(fields.val!=null)p.val=fields.val;
+  if(fields.val!=null){ p.val=fields.val; p.movePct=movePctFor(id,p.val); }
   if(fields.pl!=null)p.pl=fields.pl;
   if(fields.name)p.name=fields.name;
   return p;
