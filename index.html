@@ -345,14 +345,30 @@ function parTilt(e){
   _par.ty=Math.max(-1,Math.min(1,((e.beta||0)-45)/28));
 }
 window.addEventListener("deviceorientation",parTilt);
+/* iOS needs an explicit user click to grant motion access — show a small chip until granted */
 if(typeof DeviceOrientationEvent!=="undefined"&&typeof DeviceOrientationEvent.requestPermission==="function"){
-  var askTilt=function(){
-    try{ DeviceOrientationEvent.requestPermission().then(function(s){
-      if(s==="granted")window.addEventListener("deviceorientation",parTilt);
-    }).catch(function(){}); }catch(_){}
-    document.removeEventListener("pointerdown",askTilt);
-  };
-  document.addEventListener("pointerdown",askTilt);
+  (function(){
+    var tb=document.createElement("button");
+    tb.textContent="✦ enable tilt";
+    tb.style.cssText="position:absolute;top:10px;left:10px;z-index:5;background:rgba(13,25,45,0.85);"+
+      "color:#8ecdff;border:1px solid rgba(90,180,255,0.45);border-radius:14px;padding:5px 11px;"+
+      "font:600 11px ui-monospace,monospace;cursor:pointer;-webkit-tap-highlight-color:transparent;";
+    document.getElementById("stage").appendChild(tb);
+    tb.addEventListener("click",function(){
+      DeviceOrientationEvent.requestPermission().then(function(s){
+        if(s==="granted"){ window.addEventListener("deviceorientation",parTilt); tb.remove(); }
+        else{
+          tb.textContent="tilt blocked — allow Motion in Safari settings";
+          setTimeout(function(){tb.remove();},4000);
+        }
+      }).catch(function(){
+        tb.textContent="tilt unavailable";
+        setTimeout(function(){tb.remove();},2500);
+      });
+    });
+    /* if motion events already flow (older iOS / permission remembered), drop the chip */
+    setTimeout(function(){ if(_par.gyro)tb.remove(); },2500);
+  })();
 }
 /* #8 market-hours sky */
 var _sky={k:1,open:true,last:-1};
