@@ -335,7 +335,12 @@ document.getElementById("ioBtn").addEventListener("click",function(){
 /* ───────────────────────── nebula engine (Final Trade style) ─────────────────────────
    Hierarchy: STRATEGIES are suns; HOLDINGS orbit their sun as planets.
    Sun size = strategy total; planet size = position value; planet color = P/L. */
-var _neb={nodes:{}, stars:[], t:0, prevTs:0, W:0, H:0};
+var _neb={nodes:{}, stars:[], t:0, prevTs:0, W:0, H:0, pulses:[]};
+function addPulse(id,delta){
+  if(Math.abs(delta)<0.01)return;
+  _neb.pulses.push({id:id,t0:_neb.t,delta:delta});
+  if(_neb.pulses.length>30)_neb.pulses.shift();
+}
 var lerp=function(a,b,t){return a+(b-a)*t;};
 var cv=document.getElementById("cv");
 
@@ -414,6 +419,7 @@ function nebUpdate(){
         driftAmp:3+Math.random()*3};
     }else{
       var n=_neb.nodes[sid];
+      if(n.alpha>0.5) addPulse(sid, g.total-n.val);
       n.bx=bx;n.by=by;n.tScore=gs;n.tR=sr;n.tAlpha=1;n.val=g.total;n.pl=g.pl;
       n.name=GROUPS[g.grp].label+" strategy — "+g.items.length+" holding"+(g.items.length>1?"s":"");
     }
@@ -440,6 +446,7 @@ function nebUpdate(){
           val:p.val,pl:p.pl||0,name:p.name};
       }else{
         var m=_neb.nodes[pid];
+        if(m.alpha>0.5) addPulse(pid, p.val-m.val);
         m.tScore=ps;m.tR=pr;m.tOR=oR;m.tAlpha=1;m.val=p.val;m.pl=p.pl||0;m.sun=sid;m.name=p.name;
       }
     });
@@ -725,6 +732,26 @@ function nebRender(){
       ctx.restore();
     }
   });
+  /* live pulses: expanding ripple + floating € delta on value change */
+  for(var pi2=_neb.pulses.length-1;pi2>=0;pi2--){
+    var pu=_neb.pulses[pi2];
+    var node=_neb.nodes[pu.id];
+    var age=t-pu.t0;
+    if(!node||age>1600){ _neb.pulses.splice(pi2,1); continue; }
+    var k=age/1600, up2=pu.delta>=0;
+    var pc=up2?"63,185,80":"248,81,73";
+    ctx.save();
+    ctx.globalAlpha=(1-k)*0.55*node.alpha;
+    ctx.strokeStyle="rgba("+pc+",0.9)";
+    ctx.lineWidth=2*(1-k)+0.5;
+    ctx.beginPath(); ctx.arc(node.x,node.y,node.r*(1+1.6*k)+3,0,6.283); ctx.stroke();
+    ctx.globalAlpha=(1-k)*node.alpha;
+    ctx.fillStyle="rgba("+pc+",0.95)";
+    ctx.font="700 9px ui-monospace"; ctx.textAlign="center"; ctx.textBaseline="middle";
+    ctx.fillText(fmtSigned(pu.delta), node.x, node.y-node.r-10-k*20);
+    ctx.restore();
+  }
+
   /* status line */
   var suns=planets.filter(function(n){return n.alpha>0.5&&n.isSun;});
   var orbs=moons.filter(function(n){return n.alpha>0.5;});
