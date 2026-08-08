@@ -176,7 +176,7 @@
 /* ───────────────────────── data ───────────────────────── */
 var GROUPS = {
   core:{label:"CORE"}, comp:{label:"COMP"}, div:{label:"DIV"}, btc:{label:"BTC"}, cash:{label:"CASH"},
-  dip:{label:"DIP"}, other:{label:"OTHER"}
+  queued:{label:"QUEUED"}, dip:{label:"DIP"}, other:{label:"OTHER"}
 };
 var DEFAULT = [
   {id:"VWCE", name:"Vanguard FTSE All-World",  grp:"core", val:3383, pl:207},
@@ -290,7 +290,7 @@ function planetTexture(sym,r,c){
 var editing=false;
 /* ── ACCOUNT VALUE hero: totals, today's move, return %, pots, 24h sparkline ── */
 var PIECASH=0;   /* pie cash awaiting execution, from the live feed */
-var ABKEY="tft-nebula-acctbase-v2", HKEY="tft-nebula-hist-v2";
+var ABKEY="tft-nebula-acctbase-v3", HKEY="tft-nebula-hist-v3";
 var AB=(function(){try{var s=localStorage.getItem(ABKEY);if(s)return JSON.parse(s);}catch(e){}return{d:"",v:0};})();
 var HIST=(function(){try{var s=localStorage.getItem(HKEY);if(s)return JSON.parse(s);}catch(e){}return[];})();
 function drawSpark(){
@@ -335,7 +335,7 @@ function updateAcct(tot,pl){
     else if(p.grp==="btc")btc+=p.val;
     else inv+=p.val;
   });
-  inv+=PIECASH;   /* match T212: queued pie cash counts as Investments */
+  /* queued pie cash rides in as its own grp ("queued") and lands in inv above, matching T212 */
   var e;
   if(e=document.getElementById("acctVal")) e.textContent=fmt2(tot);
   if(e=document.getElementById("acctInv")) e.innerHTML=fmt2(inv)+
@@ -376,14 +376,13 @@ function updateAcct(tot,pl){
 }
 function renderMeta(){
   var tot=0,pl=0; data.forEach(function(p){tot+=p.val; pl+=(p.pl||0);});
-  tot+=PIECASH;
   document.getElementById("total").textContent=fmt(tot);
   var d=document.getElementById("delta");
   d.textContent=fmtSigned(pl); d.className=pl>=0?"up":"dn";
   updateAcct(tot,pl);
 }
 var grpFilter="ALL";
-var GROUP_LABELS={core:"Core",comp:"Compounding",div:"Dividend",btc:"BTC",cash:"Cash",dip:"Dip buys",other:"Other"};
+var GROUP_LABELS={core:"Core",comp:"Compounding",div:"Dividend",btc:"BTC",cash:"Cash",queued:"Queued orders",dip:"Dip buys",other:"Other"};
 function renderFilterOptions(){
   var sel=document.getElementById("grpFilter"); if(!sel)return;
   var present={}; data.forEach(function(p){present[p.grp]=1;});
@@ -502,7 +501,7 @@ function marketOpen(){
   return inWin("Europe/Berlin",9,0,17,30)||inWin("America/New_York",9,30,16,0);
 }
 /* #7 fog hues per strategy system */
-var FOGHUES={core:"64,190,255",comp:"120,110,255",div:"63,185,120",btc:"255,170,60",cash:"140,160,190",dip:"255,196,0",other:"190,120,255"};
+var FOGHUES={core:"64,190,255",comp:"120,110,255",div:"63,185,120",btc:"255,170,60",cash:"140,160,190",queued:"170,180,210",dip:"255,196,0",other:"190,120,255"};
 function addPulse(id,delta){
   if(Math.abs(delta)<0.01)return;
   _neb.pulses.push({id:id,t0:_neb.t,delta:delta});
@@ -1231,12 +1230,14 @@ function upsert(id,fields){
 }
 function applyLive(j){
   if(!j||!j.positions)return;
+  var liveIds={};
   j.positions.forEach(function(pos){
     var m=mapTicker(pos.ticker||"");
     var val=(pos.quantity||0)*(pos.currentPrice||0);
     var pl=(pos.ppl||0)+(pos.fxPpl||0);
-    if(m){ upsert(m[1],{val:val,pl:pl,grp:m[2]}); }
-    else { upsert((pos.ticker||"?").replace(/_.*/,""),{val:val,pl:pl,grp:"other",name:pos.ticker}); }
+    if(m){ upsert(m[1],{val:val,pl:pl,grp:m[2]}); liveIds[m[1]]=1; }
+    else { var oid=(pos.ticker||"?").replace(/_.*/,"");
+           upsert(oid,{val:val,pl:pl,grp:"other",name:pos.ticker}); liveIds[oid]=1; }
   });
   if(j.cash&&j.cash.free!=null){
     upsert("CASH",{val:(j.cash.free||0)+(j.cash.blocked||0),grp:"cash"});
@@ -1245,7 +1246,16 @@ function applyLive(j){
     if(j.cash.pieCash!=null) PIECASH=j.cash.pieCash||0;
     else if(j.cash.total!=null)
       PIECASH=Math.max(0,(j.cash.total||0)-(j.cash.free||0)-(j.cash.invested||0)-(j.cash.ppl||0));
+    if(PIECASH>0.5) upsert("QUEUED",{val:PIECASH,grp:"queued",name:"Pie cash awaiting order execution"});
   }
+  /* the live feed is authoritative: drop stale placeholder holdings it no longer reports
+     (keeps CASH, QUEUED, and the BTC sleeve, which come from other sources) */
+  data=data.filter(function(p){
+    if(p.grp==="btc"||p.grp==="cash"||p.id==="QUEUED")return true;
+    return !!liveIds[p.id];
+  });
+  if(PIECASH<=0.5) data=data.filter(function(p){return p.id!=="QUEUED";});
+  save();
   renderMeta(); renderTable(); nebUpdate();
 }
 function pollT212(){
