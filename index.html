@@ -87,7 +87,7 @@
 <body>
 
 <div class="topline">
-  <div class="brand">Portfolio<em>Nebula</em> <span id="liveStatus" style="font-size:9px;color:var(--dim);font-weight:400">manual</span> <span style="font-size:9px;color:var(--dim);font-weight:400">v21</span></div>
+  <div class="brand">Portfolio<em>Nebula</em> <span id="liveStatus" style="font-size:9px;color:var(--dim);font-weight:400">manual</span> <span style="font-size:9px;color:var(--dim);font-weight:400">v22</span></div>
   <div class="tot"><b id="total">—</b> <span id="delta"></span></div>
 </div>
 
@@ -96,7 +96,7 @@
     <div class="alabel">ACCOUNT VALUE</div>
     <div id="acctVal">—</div>
     <div style="display:flex;gap:36px;margin-bottom:13px">
-      <div><div class="alabel">TODAY</div><div id="acct24" class="astat fl">—</div></div>
+      <div><div class="alabel" id="acct24Label">TODAY</div><div id="acct24" class="astat fl">—</div></div>
       <div><div class="alabel">RATE OF RETURN</div><div id="acctRor" class="astat fl">—</div></div>
     </div>
     <div style="display:flex;gap:10px;flex-wrap:wrap">
@@ -321,14 +321,7 @@ function rangeCutoff(r){
   if(r==="YTD"){var d=new Date();return new Date(d.getFullYear(),0,1).getTime();}
   return now-24*3600*1000;   /* 1D */
 }
-function drawSpark(){
-  var sc=document.getElementById("spark");
-  if(!sc||!sc.getContext)return;
-  var dpr=Math.min((window.devicePixelRatio||1),2);
-  var w=sc.clientWidth||200,h=sc.clientHeight||58;
-  if(!w||!h)return;
-  sc.width=Math.round(w*dpr); sc.height=Math.round(h*dpr);
-  var g=sc.getContext("2d"); g.setTransform(dpr,0,0,dpr,0,0);
+function rangePts(){
   var cut=rangeCutoff(RANGE);
   /* 1D reads the per-minute series; longer ranges read the one-point-per-day series,
      padded with the minute series while the daily history is still young */
@@ -345,6 +338,38 @@ function drawSpark(){
       pts=merged;
     }
   }
+  return pts;
+}
+/* period change stat — follows the selected graph range */
+var LASTTOT=0,LASTDAYCH=0,LASTDAYPCT=0;
+function updateRangeStat(){
+  var e=document.getElementById("acct24"); if(!e)return;
+  var lab=document.getElementById("acct24Label");
+  var ch,pct,labTxt,pctOk=true;
+  if(RANGE==="1D"){ ch=LASTDAYCH; pct=LASTDAYPCT; labTxt="TODAY"; }
+  else{
+    labTxt=(RANGE==="YTD"?"YTD":RANGE)+" CHANGE";
+    var pts=rangePts();
+    if(pts.length&&LASTTOT){
+      var base=pts[0][1];
+      ch=LASTTOT-base;
+      if(base>=1){ pct=100*ch/base; } else { pct=0; pctOk=false; }  /* period started near €0 */
+    }else{ ch=0; pct=0; }
+  }
+  if(lab)lab.textContent=labTxt;
+  e.className="astat "+(Math.abs(ch)<0.005?"fl":(ch>=0?"up":"dn"));
+  e.textContent=(ch>=0?"↗ ":"↘ ")+"€"+Math.abs(ch).toLocaleString("en-IE",{minimumFractionDigits:2,maximumFractionDigits:2})+
+    (pctOk?" ("+(pct>=0?"+":"−")+Math.abs(pct).toFixed(2)+"%)":"");
+}
+function drawSpark(){
+  var sc=document.getElementById("spark");
+  if(!sc||!sc.getContext)return;
+  var dpr=Math.min((window.devicePixelRatio||1),2);
+  var w=sc.clientWidth||200,h=sc.clientHeight||58;
+  if(!w||!h)return;
+  sc.width=Math.round(w*dpr); sc.height=Math.round(h*dpr);
+  var g=sc.getContext("2d"); g.setTransform(dpr,0,0,dpr,0,0);
+  var pts=rangePts();
   if(!pts.length)return;
   if(pts.length===1) pts=[[pts[0][0]-60000,pts[0][1]],[Date.now(),pts[0][1]]];
   var plotB=h-12;   /* reserve a strip for time labels */
@@ -390,7 +415,7 @@ function drawSpark(){
     b.addEventListener("click",function(){
       RANGE=b.dataset.r;
       try{localStorage.setItem(RKEY,RANGE);}catch(_){}
-      mark(); drawSpark();
+      mark(); drawSpark(); updateRangeStat();
     });
   });
   mark();
@@ -419,11 +444,8 @@ function updateAcct(tot,pl){
     try{localStorage.setItem(ABKEY,JSON.stringify(AB));}catch(_){}
   }
   var ch=(AB.d===day&&AB.v)?tot-AB.v:0, chPct=(AB.d===day&&AB.v)?100*ch/AB.v:0;
-  if(e=document.getElementById("acct24")){
-    e.className="astat "+(Math.abs(ch)<0.005?"fl":(ch>=0?"up":"dn"));
-    e.textContent=(ch>=0?"↗ ":"↘ ")+"€"+Math.abs(ch).toLocaleString("en-IE",{minimumFractionDigits:2,maximumFractionDigits:2})+
-      " ("+(chPct>=0?"+":"−")+Math.abs(chPct).toFixed(2)+"%)";
-  }
+  LASTTOT=tot; LASTDAYCH=ch; LASTDAYPCT=chPct;
+  updateRangeStat();
   /* rate of return: total unrealised P/L over cost */
   var cost=tot-pl, ror=cost>0?100*pl/cost:0;
   if(e=document.getElementById("acctRor")){
