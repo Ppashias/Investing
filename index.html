@@ -1240,7 +1240,11 @@ function applyLive(j){
   });
   if(j.cash&&j.cash.free!=null){
     upsert("CASH",{val:(j.cash.free||0)+(j.cash.blocked||0),grp:"cash"});
-    PIECASH=j.cash.pieCash||0;   /* money queued inside pies — T212 counts it as Investments */
+    /* money queued inside pies — T212 counts it as Investments.
+       Prefer the explicit field; otherwise derive it: total − free − invested − ppl */
+    if(j.cash.pieCash!=null) PIECASH=j.cash.pieCash||0;
+    else if(j.cash.total!=null)
+      PIECASH=Math.max(0,(j.cash.total||0)-(j.cash.free||0)-(j.cash.invested||0)-(j.cash.ppl||0));
   }
   renderMeta(); renderTable(); nebUpdate();
 }
