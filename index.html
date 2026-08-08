@@ -8,6 +8,7 @@
 <meta name="apple-mobile-web-app-title" content="Nebula">
 <meta name="theme-color" content="#05080f">
 <title>Portfolio Nebula — Final Trade style</title>
+<!--BUILD:23-->
 <style>
   :root{
     color-scheme:dark;
@@ -87,7 +88,7 @@
 <body>
 
 <div class="topline">
-  <div class="brand">Portfolio<em>Nebula</em> <span id="liveStatus" style="font-size:9px;color:var(--dim);font-weight:400">manual</span> <span style="font-size:9px;color:var(--dim);font-weight:400">v22</span></div>
+  <div class="brand">Portfolio<em>Nebula</em> <span id="liveStatus" style="font-size:9px;color:var(--dim);font-weight:400">manual</span> <span style="font-size:9px;color:var(--dim);font-weight:400">v23</span></div>
   <div class="tot"><b id="total">—</b> <span id="delta"></span></div>
 </div>
 
@@ -1419,6 +1420,26 @@ document.getElementById("cfgSave").addEventListener("click",function(){
   pollT212(); pollBTC();
 });
 pollT212(); pollBTC();   /* poll immediately on load — don't wait for the first interval */
+/* self-updater: check the server copy every 3 min; offer one-tap refresh when newer */
+var BUILD=23;
+function checkUpdate(){
+  if(typeof location==="undefined")return;
+  fetch(location.pathname+"?upd="+Date.now(),{cache:"no-store"})
+    .then(function(r){return r.text();})
+    .then(function(t){
+      var m=t.match(/BUILD:(\d+)/);
+      if(m&&parseInt(m[1],10)>BUILD&&!document.getElementById("updChip")){
+        var b=document.createElement("button");
+        b.id="updChip"; b.textContent="⬆ update ready — tap to refresh";
+        b.style.cssText="position:fixed;bottom:14px;left:50%;transform:translateX(-50%);z-index:60;"+
+          "background:#13223a;color:#8ecdff;border:1px solid #2c4a6e;border-radius:16px;"+
+          "padding:8px 14px;font:600 12px ui-monospace,monospace;box-shadow:0 4px 16px rgba(0,0,0,0.5);";
+        b.addEventListener("click",function(){ location.reload(); });
+        document.body.appendChild(b);
+      }
+    }).catch(function(_){});
+}
+setInterval(checkUpdate,180000); setTimeout(checkUpdate,15000);
 setInterval(pollT212,30000);
 setInterval(pollBTC,60000);
 
