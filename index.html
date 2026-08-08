@@ -1350,15 +1350,30 @@ function pollT212(){
     })
     .catch(function(e){ liveOK=false; setStatus("live error: "+(e&&e.message||"network"),false); });
 }
+function applyBTC(px){
+  if(!px||!(LIVECFG.btcQty>0))return;
+  var v=LIVECFG.btcQty*px;
+  upsert("BTC",{val:v,pl:v-LIVECFG.btcCost,grp:"btc"});
+  renderMeta(); renderTable(); nebUpdate();
+}
 function pollBTC(){
   fetch("https://api.coingecko.com/api/v3/simple/price?ids=bitcoin&vs_currencies=eur")
     .then(function(r){return r.json();})
     .then(function(j){
-      var px=j&&j.bitcoin&&j.bitcoin.eur; if(!px)return;
-      var v=LIVECFG.btcQty*px;
-      upsert("BTC",{val:v,pl:v-LIVECFG.btcCost,grp:"btc"});
-      renderMeta(); renderTable(); nebUpdate();
-    }).catch(function(e){});
+      var px=j&&j.bitcoin&&j.bitcoin.eur;
+      if(px) applyBTC(px); else throw new Error("no px");
+    })
+    .catch(function(e){
+      /* CoinGecko unreachable (common on mobile networks) — fall back to the Worker's
+         Yahoo price proxy, which we know is reachable because equity data flows */
+      if(!LIVECFG.url||!LIVECFG.token)return;
+      fetch(normUrl(LIVECFG.url)+"/prices?t="+encodeURIComponent(LIVECFG.token)+"&symbol=BTC-EUR&range=5d")
+        .then(function(r){return r.json();})
+        .then(function(j){
+          var pts=j&&j.points;
+          if(pts&&pts.length) applyBTC(pts[pts.length-1][1]);
+        }).catch(function(_){});
+    });
 }
 /* Live settings panel */
 document.getElementById("liveBtn").addEventListener("click",function(){
@@ -1379,6 +1394,7 @@ document.getElementById("cfgSave").addEventListener("click",function(){
   document.getElementById("cfgMsg").textContent="saved — polling…";
   pollT212(); pollBTC();
 });
+pollT212(); pollBTC();   /* poll immediately on load — don't wait for the first interval */
 setInterval(pollT212,30000);
 setInterval(pollBTC,60000);
 
