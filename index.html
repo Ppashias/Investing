@@ -1241,7 +1241,7 @@ function pollT212(){
   var u=normUrl(LIVECFG.url)+"/portfolio?t="+encodeURIComponent(LIVECFG.token);
   fetch(u).then(function(r){ if(!r.ok) throw new Error("HTTP "+r.status); return r.json(); })
     .then(function(j){
-      applyLive(j); liveOK=true;
+      liveOK=true; applyLive(j);
       var ts=new Date(); setStatus("LIVE "+ts.toTimeString().slice(0,8),true);
     })
     .catch(function(e){ liveOK=false; setStatus("live error: "+(e&&e.message||"network"),false); });
