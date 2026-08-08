@@ -1,0 +1,714 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="Nebula">
+<meta name="theme-color" content="#05080f">
+<title>Portfolio Nebula — Final Trade style</title>
+<style>
+  :root{
+    color-scheme:dark;
+    --bg:#0a0e16; --card:#0d1117; --border:#1e2633;
+    --text:#c9d1d9; --muted:#8aa0c8; --dim:#5a6b8c;
+    --green:#3fb950; --red:#f85149; --blue:#4b73d2; --gold:#ffc400;
+  }
+  *{margin:0;padding:0;box-sizing:border-box;-webkit-tap-highlight-color:transparent}
+  html,body{height:100%}
+  body{
+    background:var(--bg); color:var(--text);
+    font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;
+    padding-top:env(safe-area-inset-top); overscroll-behavior:none;
+  }
+  .card{
+    background:var(--card); border:1px solid var(--border); border-radius:10px;
+    margin:10px; overflow:hidden;
+  }
+  .card-head{
+    display:flex; justify-content:space-between; align-items:baseline;
+    padding:12px 14px 8px; gap:10px; flex-wrap:wrap;
+  }
+  .card-head h3{font-size:15px; font-weight:600; color:#e6edf3}
+  .card-head h3 small{color:var(--dim); font-weight:400; font-size:11px}
+  #neb-status{font-size:10.5px; color:var(--muted); text-align:right}
+  #stage{position:relative}
+  canvas{display:block; width:100%; background:#05080f; touch-action:manipulation}
+  .neb-legend{
+    padding:7px 14px 10px; font-size:10px; color:var(--dim); line-height:1.6;
+  }
+  .neb-legend i{display:inline-block;width:8px;height:8px;border-radius:50%;margin:0 3px 0 8px;vertical-align:-1px}
+  #tt{
+    position:absolute; pointer-events:none; opacity:0; transition:opacity .15s;
+    background:rgba(10,14,22,.94); border:1px solid var(--border); border-radius:8px;
+    padding:8px 10px; font-size:11px; line-height:1.5; max-width:240px; z-index:5;
+  }
+  /* header strip */
+  .topline{display:flex; justify-content:space-between; align-items:center; padding:12px 14px 0}
+  .topline .brand{font-size:13px; font-weight:700; color:#e6edf3}
+  .topline .brand em{font-style:normal; color:var(--gold)}
+  .topline .tot{font-size:13px}
+  .topline .tot b{font-size:16px; color:#e6edf3}
+  /* table + controls */
+  .btnrow{display:flex; gap:8px; padding:0 14px 10px}
+  button{
+    background:#161d29; color:var(--muted); border:1px solid var(--border);
+    border-radius:8px; padding:7px 12px; font-size:11.5px; font-weight:600;
+    font-family:inherit;
+  }
+  button.primary{color:#e6edf3; border-color:#2c3a52}
+  table{width:100%; border-collapse:collapse; font-size:12px}
+  td{padding:7px 14px; border-top:1px solid var(--border)}
+  td.val{text-align:right; font-variant-numeric:tabular-nums; white-space:nowrap}
+  .up{color:var(--green)} .dn{color:var(--red)} .fl{color:var(--muted)}
+  .tag{font-size:9px; color:var(--dim); margin-left:6px}
+  input[type=number]{
+    width:78px; background:#05080f; color:var(--text); border:1px solid var(--border);
+    border-radius:6px; padding:4px 6px; font-size:12px; text-align:right; font-family:inherit;
+  }
+  #ioArea{width:calc(100% - 28px); margin:0 14px 12px; height:100px; background:#05080f;
+    color:var(--muted); border:1px solid var(--border); border-radius:8px; padding:8px;
+    font-size:10px; display:none; font-family:inherit}
+  footer{padding:2px 16px calc(26px + env(safe-area-inset-bottom)); color:var(--dim); font-size:10px; line-height:1.6}
+</style>
+</head>
+<body>
+
+<div class="topline">
+  <div class="brand">Portfolio<em>Nebula</em></div>
+  <div class="tot"><b id="total">—</b> <span id="delta"></span></div>
+</div>
+
+<div class="card">
+  <div class="card-head">
+    <h3>Strategy Systems <small>(suns = strategies · orbits = holdings)</small></h3>
+    <div id="neb-status">—</div>
+  </div>
+  <div id="stage">
+    <canvas id="cv"></canvas>
+    <div id="tt"></div>
+  </div>
+  <div class="neb-legend">
+    <i style="background:#40beff;margin-left:0"></i>electric-blue suns = your strategies (biggest bubbles) · orbiting planets = holdings, sized by value
+    <br><i style="background:var(--green)"></i>up <i style="background:var(--red)"></i>down
+    <i style="background:var(--blue)"></i>flat/pending <i style="background:var(--gold)"></i>recommended buy
+    &nbsp;· tap any body for details
+  </div>
+</div>
+
+<div class="card">
+  <div class="card-head"><h3>Holdings</h3>
+    <div class="btnrow" style="padding:0">
+      <button id="editBtn">Edit</button><button id="ioBtn">Backup</button>
+    </div>
+  </div>
+  <table id="tbl"></table>
+  <textarea id="ioArea" spellcheck="false"></textarea>
+</div>
+
+<footer>
+  Snapshot 7 Aug 2026 — MSF, 3V64, ABEA, REN, JNJ, 4AB and the €400 VWCE/IS3N top-up fill Monday at open; tap Edit after to update values &amp; P/L.
+  LVMH rides the gold ring as the standing dip recommendation (€800 tranche) until bought or cancelled. Edits save on this device where possible; Backup exports as text.
+  <br>Tap any orbiting holding to open its live TradingView chart (XETR / NYSE / Euronext / Bitstamp feeds — full indicator &amp; drawing toolbar). Some free feeds are 15-min delayed unless you sign into TradingView inside the chart. Needs internet; if the embed is blocked in a preview pane, use the ↗ button to open it on tradingview.com.
+</footer>
+
+<!-- ── full-screen chart modal (TradingView advanced widget) ── -->
+<div id="chartModal" style="display:none; position:fixed; inset:0; z-index:50; background:#05080f; flex-direction:column;">
+  <div style="display:flex; align-items:center; gap:10px; padding:10px 12px; padding-top:calc(10px + env(safe-area-inset-top)); border-bottom:1px solid var(--border);">
+    <strong id="chartTitle" style="font-size:13px; color:#e6edf3;">—</strong>
+    <span id="chartSym" style="font-size:11px; color:var(--muted);"></span>
+    <span style="flex:1"></span>
+    <a id="chartExt" href="#" target="_blank" rel="noopener" style="color:var(--muted); font-size:12px; text-decoration:none; border:1px solid var(--border); border-radius:8px; padding:6px 10px;">tradingview ↗</a>
+    <button id="chartClose">✕ close</button>
+  </div>
+  <div id="tvWrap" style="flex:1; position:relative;">
+    <div id="tvContainer" style="position:absolute; inset:0;"></div>
+    <div id="tvFallback" style="display:none; position:absolute; inset:0; align-items:center; justify-content:center; color:var(--muted); font-size:12px; text-align:center; padding:30px;">
+      The TradingView embed couldn't load here (blocked network or preview sandbox).<br><br>Use the “tradingview ↗” button above — same chart, same tools, in your browser.
+    </div>
+  </div>
+</div>
+
+<script>
+(function(){
+"use strict";
+/* ───────────────────────── data ───────────────────────── */
+var GROUPS = {
+  core:{label:"CORE"}, comp:{label:"COMP"}, div:{label:"DIV"}, btc:{label:"BTC"}, cash:{label:"CASH"}
+};
+var DEFAULT = [
+  {id:"VWCE", name:"Vanguard FTSE All-World",  grp:"core", val:3383, pl:207},
+  {id:"IS3N", name:"iShares MSCI EM IMI",      grp:"core", val:376,  pl:11},
+  {id:"MSFT", name:"Microsoft · MSF XETR",     grp:"comp", val:113,  pl:0},
+  {id:"V",    name:"Visa · 3V64 XETR",         grp:"comp", val:113,  pl:0},
+  {id:"GOOGL",name:"Alphabet A · ABEA XETR",   grp:"comp", val:92,   pl:0},
+  {id:"SPGI", name:"S&P Global · MHL GETTEX",  grp:"comp", val:67,   pl:-1},
+  {id:"TSM",  name:"TSMC · TSFA GETTEX",       grp:"comp", val:34,   pl:0},
+  {id:"RELX", name:"RELX · REN AMS",           grp:"div",  val:72,   pl:0},
+  {id:"JNJ",  name:"J&J · JNJ XETR",           grp:"div",  val:63,   pl:0},
+  {id:"ABBV", name:"AbbVie · 4AB XETR",        grp:"div",  val:45,   pl:0},
+  {id:"BTC",  name:"Bitcoin · T212 Crypto",    grp:"btc",  val:99,   pl:-1},
+  {id:"CASH", name:"Dip powder · Main Pot",    grp:"cash", val:800,  pl:0}
+];
+var PICK = {id:"LVMH", name:"LVMH · MC PAR — recommended dip buy", grp:"pick", val:800, pl:0, tag:"PICK BUY €800"};
+
+/* TradingView symbol per asset — the EUR line you actually own where TV carries it,
+   the primary listing otherwise (SPGI/TSM: Gettex lines aren't on TV) */
+var TVMAP = {
+  VWCE:"XETR:VWCE",  IS3N:"XETR:IS3N",
+  MSFT:"XETR:MSF",   V:"XETR:3V64",   GOOGL:"XETR:ABEA",
+  SPGI:"NYSE:SPGI",  TSM:"NYSE:TSM",
+  RELX:"EURONEXT:REN", JNJ:"XETR:JNJ", ABBV:"XETR:4AB",
+  BTC:"BITSTAMP:BTCEUR", LVMH:"EURONEXT:MC"
+};
+
+var KEY="tft-nebula-portfolio-v2";
+function load(){ try{var s=localStorage.getItem(KEY); if(s) return JSON.parse(s);}catch(e){} return JSON.parse(JSON.stringify(DEFAULT)); }
+function save(){ try{ localStorage.setItem(KEY, JSON.stringify(data)); }catch(e){} }
+var data=load();
+
+function fmt(n){ return "€"+Math.round(n).toLocaleString("en-IE"); }
+function fmtSigned(n){ return (n>=0?"+":"−")+"€"+Math.abs(Math.round(n)).toLocaleString(); }
+
+/* score = P/L% mapped to [-1,1], ±5% saturates — drives the TFT color scheme */
+function plScore(p){ if(!p.val) return 0; var pct=100*(p.pl||0)/Math.max(1,p.val-(p.pl||0)); return Math.max(-1,Math.min(1,pct/5)); }
+function nebRGB(score){
+  var a=Math.min(1,Math.abs(score));
+  if(score>0.12)  return [20+a*50, 160+a*95, 60+a*30];
+  if(score<-0.12) return [210+a*45, 35+a*20, 70+a*90];
+  return [75,115,210];
+}
+function nebRGBA(score,alpha){ var c=nebRGB(score); return "rgba("+Math.round(c[0])+","+Math.round(c[1])+","+Math.round(c[2])+","+alpha+")"; }
+
+/* ───────────────────────── header / table ───────────────────────── */
+var editing=false;
+function renderMeta(){
+  var tot=0,pl=0; data.forEach(function(p){tot+=p.val; pl+=(p.pl||0);});
+  document.getElementById("total").textContent=fmt(tot);
+  var d=document.getElementById("delta");
+  d.textContent=fmtSigned(pl); d.className=pl>=0?"up":"dn";
+}
+function renderTable(){
+  var t=document.getElementById("tbl"); t.innerHTML="";
+  var tot=0; data.forEach(function(p){tot+=p.val;});
+  data.slice().sort(function(a,b){return b.val-a.val;}).forEach(function(p){
+    var s=plScore(p), cls=s>0.12?"up":(s<-0.12?"dn":"fl");
+    var tr=document.createElement("tr");
+    var val = editing
+      ? '<input type="number" value="'+p.val+'" data-id="'+p.id+'" data-f="val"> ' +
+        '<input type="number" value="'+(p.pl||0)+'" data-id="'+p.id+'" data-f="pl" style="width:60px">'
+      : fmt(p.val)+' <span class="'+cls+'">'+fmtSigned(p.pl||0)+'</span>'+
+        ' <span class="tag">'+(100*p.val/tot).toFixed(1)+'%</span>';
+    tr.innerHTML='<td><strong>'+p.id+'</strong><span class="tag">'+GROUPS[p.grp].label+'</span>'+
+      '<br><span class="tag">'+p.name+'</span></td><td class="val">'+val+'</td>';
+    t.appendChild(tr);
+  });
+  if(editing){
+    t.querySelectorAll("input").forEach(function(inp){
+      inp.addEventListener("change",function(){
+        var p=data.find(function(x){return x.id===inp.dataset.id;});
+        var v=parseFloat(inp.value);
+        if(!isNaN(v)){ if(inp.dataset.f==="val"&&v>=0)p.val=v; if(inp.dataset.f==="pl")p.pl=v;
+          save(); renderMeta(); nebUpdate(); }
+      });
+    });
+  }
+}
+document.getElementById("editBtn").addEventListener("click",function(){
+  editing=!editing; this.textContent=editing?"Done":"Edit";
+  this.classList.toggle("primary",editing); renderTable();
+});
+var ioArea=document.getElementById("ioArea");
+document.getElementById("ioBtn").addEventListener("click",function(){
+  if(ioArea.style.display==="block"){
+    try{var a=JSON.parse(ioArea.value); if(Array.isArray(a)&&a.length){data=a; save(); renderMeta(); renderTable(); nebUpdate();}}
+    catch(e){ alert("Bad JSON — nothing changed."); }
+    ioArea.style.display="none"; this.textContent="Backup";
+  }else{ ioArea.value=JSON.stringify(data); ioArea.style.display="block"; this.textContent="Apply"; }
+});
+
+/* ───────────────────────── nebula engine (Final Trade style) ─────────────────────────
+   Hierarchy: STRATEGIES are suns; HOLDINGS orbit their sun as planets.
+   Sun size = strategy total; planet size = position value; planet color = P/L. */
+var _neb={nodes:{}, stars:[], t:0, prevTs:0, W:0, H:0};
+var lerp=function(a,b,t){return a+(b-a)*t;};
+var cv=document.getElementById("cv");
+
+function initStars(W,H){
+  if(_neb.stars.length && _neb.W===W && _neb.H===H) return;
+  _neb.W=W; _neb.H=H;
+  var n=Math.round(Math.max(110,Math.min(320,(W*H)/3400)));
+  _neb.stars=Array.from({length:n},function(){return{
+    x:Math.random()*W, y:Math.random()*H, r:0.3+Math.random()*1.1,
+    base:0.06+Math.random()*0.28, phase:Math.random()*Math.PI*2,
+    freq:0.0003+Math.random()*0.0009};});
+}
+function ellipsePerim(a,b){var h=Math.pow(a-b,2)/Math.pow(a+b,2);return Math.PI*(a+b)*(1+(3*h)/(10+Math.sqrt(4-3*h)));}
+/* equal ARC-length placement, weighted by each body's arc need */
+function placeOnEllipse(a,b,needs,phaseFrac){
+  var SAMP=720,cum=[0],px=a,py=0,total=0;
+  for(var i=1;i<=SAMP;i++){var th=(i/SAMP)*Math.PI*2,x=a*Math.cos(th),y=b*Math.sin(th);
+    total+=Math.hypot(x-px,y-py); cum.push(total); px=x; py=y;}
+  var needSum=needs.reduce(function(s,n){return s+n;},0)||1;
+  var out=[],acc=(phaseFrac||0)*total;
+  needs.forEach(function(n){
+    var target=(acc+n/2)%total; acc+=n/needSum*total*(needSum>total?1:needSum/needSum);
+    acc=(acc)% (total+1e9); // cursor advances by this body's share below
+    var lo=0,hi=SAMP;
+    while(lo<hi){var mid=(lo+hi)>>1; if(cum[mid]<target)lo=mid+1; else hi=mid;}
+    out.push((lo/SAMP)*Math.PI*2);
+  });
+  return out;
+}
+function nebUpdate(){
+  var W=cv.clientWidth||360, H=cv.clientHeight||420, CX=W/2, CY=H/2;
+  var seen={};
+  /* aggregate strategies */
+  var groups={};
+  data.forEach(function(p){
+    var g=groups[p.grp]=groups[p.grp]||{grp:p.grp,total:0,pl:0,items:[]};
+    g.total+=p.val; g.pl+=(p.pl||0); g.items.push(p);
+  });
+  var glist=Object.keys(GROUPS).filter(function(g){return groups[g];}).map(function(g){return groups[g];});
+  var tot=0,maxG=0,maxP=0;
+  glist.forEach(function(g){ tot+=g.total; if(g.total>maxG)maxG=g.total;
+    g.items.forEach(function(p){ if(p.val>maxP)maxP=p.val; }); });
+
+  /* SUNS are always the biggest bodies: sun radius from strategy total,
+     with a hard floor above the largest planet it hosts */
+  var sunMax=Math.min(W,H)*0.135, sunMin=17;
+  var plMax=Math.min(W,H)*0.062,  plMin=6.5;
+  var rPl =function(v){return Math.max(plMin, Math.sqrt(v/maxP)*plMax);};
+  var rSun=function(g){
+    var base=Math.max(sunMin,Math.sqrt(g.total/maxG)*sunMax);
+    var biggest=Math.max.apply(null,g.items.map(function(p){return rPl(p.val);}));
+    return Math.max(base, biggest*1.35);   /* the sun always out-sizes its planets */
+  };
+
+  /* SPREAD: biggest system holds the centre; the rest take the quadrants.
+     Each system gets a room budget (distance to nearest edge); orbits compress to fit. */
+  var sorted=glist.slice().sort(function(a,b){return b.total-a.total;});
+  var spots=[
+    {x:0.50,y:0.44},{x:0.22,y:0.20},{x:0.79,y:0.22},{x:0.23,y:0.78},{x:0.78,y:0.77}
+  ];
+  sorted.forEach(function(g,idx){
+    var sp=spots[Math.min(idx,spots.length-1)];
+    var bx=sp.x*W, by=sp.y*H;
+    var room=Math.min(bx,W-bx,by,H-by)-14;          /* radius available to this system */
+    var gs=Math.max(-1,Math.min(1,(100*g.pl/Math.max(1,g.total-g.pl))/5));
+    var sr=rSun(g), sid="SUN__"+g.grp;
+    g._sr=sr; g._room=room; g._bx=bx; g._by=by;
+    seen[sid]=1;
+    if(!_neb.nodes[sid]){
+      _neb.nodes[sid]={id:sid,sym:GROUPS[g.grp].label,grp:g.grp,isPlanet:true,isSun:true,feat:false,
+        x:CX+(Math.random()-0.5)*60,y:CY+(Math.random()-0.5)*60,
+        bx:bx,by:by,score:gs,tScore:gs,r:sr,tR:sr,alpha:0,tAlpha:1,
+        val:g.total,pl:g.pl,name:GROUPS[g.grp].label+" strategy — "+g.items.length+" holding"+(g.items.length>1?"s":""),
+        driftPX:Math.random()*6.28,driftPY:Math.random()*6.28,
+        driftFX:0.00022+Math.random()*0.00014,driftFY:0.00018+Math.random()*0.00014,
+        driftAmp:3+Math.random()*3};
+    }else{
+      var n=_neb.nodes[sid];
+      n.bx=bx;n.by=by;n.tScore=gs;n.tR=sr;n.tAlpha=1;n.val=g.total;n.pl=g.pl;
+      n.name=GROUPS[g.grp].label+" strategy — "+g.items.length+" holding"+(g.items.length>1?"s":"");
+    }
+    /* holdings orbit their sun, staggered radii so orbits nest — compressed to the room budget */
+    var sortedItems=g.items.slice().sort(function(a,b){return b.val-a.val;});
+    var rawOuter=sr;
+    sortedItems.forEach(function(p,pi){
+      var pr0=rPl(p.val);
+      rawOuter=Math.max(rawOuter, sr+pr0+9+pi*(pr0*0.85+8)+pr0);
+    });
+    var kfit=1;
+    var biggestPl=Math.max.apply(null,sortedItems.map(function(p){return rPl(p.val);}));
+    if(rawOuter>room && rawOuter>sr){ kfit=Math.max(0.35,(room-biggestPl-4-sr)/(rawOuter-sr-biggestPl)); }
+    sortedItems.forEach(function(p,pi){
+      var pid=p.id+"__orb"; seen[pid]=1;
+      var pr=rPl(p.val);
+      var oR=sr+(pr+9+pi*(pr*0.85+8))*kfit;
+      var ps=plScore(p);
+      if(!_neb.nodes[pid]){
+        _neb.nodes[pid]={id:pid,sym:p.id,sun:sid,isPlanet:false,isOrb:true,label:p.id,
+          x:bx,y:by,oAngle:(pi/sortedItems.length)*6.283+Math.random()*0.5,
+          oSpeed:(0.00022+Math.random()*0.00028)*(pi%2?1:-1),
+          oR:oR,tOR:oR,score:ps,tScore:ps,r:pr,tR:pr,alpha:0,tAlpha:1,
+          val:p.val,pl:p.pl||0,name:p.name};
+      }else{
+        var m=_neb.nodes[pid];
+        m.tScore=ps;m.tR=pr;m.tOR=oR;m.tAlpha=1;m.val=p.val;m.pl=p.pl||0;m.sun=sid;m.name=p.name;
+      }
+    });
+  });
+
+  /* gold pick — LVMH pinned to the top edge, tethered toward the Compounders sun */
+  var compG=glist.filter(function(g){return g.grp==="comp";})[0];
+  var gx,gy;
+  if(compG&&compG._bx!=null){
+    /* push outward from the comp sun toward the nearest corner, clamped inside the frame */
+    var dirX=compG._bx<CX?-1:1, dirY=compG._by<CY?-1:1;
+    gx=Math.max(46,Math.min(W-46,compG._bx+dirX*(compG._room+34)));
+    gy=Math.max(52,Math.min(H-64,compG._by+dirY*(compG._room+20)));
+  }else{ gx=W-52; gy=56; }
+  var gid="PICK__planet"; seen[gid]=1;
+  var gr=Math.max(14,rPl(PICK.val)*1.1);
+  var compSun=_neb.nodes["SUN__comp"];
+  var tx=compSun?compSun.bx:CX, ty=compSun?compSun.by:CY;
+  if(!_neb.nodes[gid]){
+    _neb.nodes[gid]={id:gid,sym:PICK.id,grp:"pick",isPlanet:true,feat:true,
+      x:gx,y:gy,bx:gx,by:gy,score:0,tScore:0,r:gr,tR:gr,alpha:0,tAlpha:1,
+      val:PICK.val,pl:0,name:PICK.name,tag:PICK.tag,
+      tetherX:tx,tetherY:ty,
+      driftPX:Math.random()*6.28,driftPY:Math.random()*6.28,
+      driftFX:0.0002,driftFY:0.00018,driftAmp:3};
+  }else{var gg=_neb.nodes[gid]; gg.bx=gx;gg.by=gy;gg.tR=gr;gg.tAlpha=1;
+    gg.tetherX=tx; gg.tetherY=ty;}
+
+  Object.keys(_neb.nodes).forEach(function(id){ if(!seen[id]) _neb.nodes[id].tAlpha=0; });
+}
+
+function nebRender(){
+  var now=performance.now();
+  var dt=_neb.prevTs?Math.min(now-_neb.prevTs,50):16;
+  _neb.prevTs=now; _neb.t+=dt; var t=_neb.t;
+  var dpr=Math.min(window.devicePixelRatio||1,2);
+  var W=cv.clientWidth,H=cv.clientHeight;
+  if(cv.width!==Math.round(W*dpr)){cv.width=Math.round(W*dpr);cv.height=Math.round(H*dpr);_neb.stars=[];}
+  var ctx=cv.getContext("2d");
+  ctx.setTransform(dpr,0,0,dpr,0,0);
+  initStars(W,H);
+  ctx.fillStyle="#05080f"; ctx.fillRect(0,0,W,H);
+  _neb.stars.forEach(function(s){
+    var a=s.base*(0.55+0.45*Math.sin(t*s.freq+s.phase));
+    ctx.beginPath(); ctx.arc(s.x,s.y,s.r,0,6.283);
+    ctx.fillStyle="rgba(180,205,255,"+a+")"; ctx.fill();
+  });
+  var lf=1-Math.pow(0.965,dt/16.67);
+  var nodes=Object.values(_neb.nodes);
+  var planets=nodes.filter(function(n){return n.isPlanet;});
+  var moons=nodes.filter(function(n){return !n.isPlanet;});
+
+  planets.forEach(function(n){
+    n.score=lerp(n.score,n.tScore,lf);
+    n.alpha=lerp(n.alpha,n.tAlpha,lf*0.4);
+    n.r=lerp(n.r,n.tR||20,lf);
+    var dx=n.driftAmp*Math.sin(t*n.driftFX+n.driftPX);
+    var dy=n.driftAmp*Math.cos(t*n.driftFY+n.driftPY);
+    n.x=lerp(n.x,n.bx+dx,lf*0.35);
+    n.y=lerp(n.y,n.by+dy,lf*0.35);
+    var pad=n.r+6;
+    n.x=Math.max(pad,Math.min(W-pad,n.x));
+    n.y=Math.max(pad,Math.min(H-pad-(n.feat?16:0),n.y));
+  });
+  moons.forEach(function(n){
+    n.score=lerp(n.score,n.tScore,lf);
+    n.r=lerp(n.r,n.tR,lf);
+    n.oR=lerp(n.oR,n.tOR||n.oR,lf);
+    n.alpha=lerp(n.alpha,n.tAlpha,lf*0.4);
+    n.oAngle+=n.oSpeed*dt;
+    var pl=_neb.nodes[n.sun];
+    if(pl){ n.x=lerp(n.x,pl.x+n.oR*Math.cos(n.oAngle),0.22);
+            n.y=lerp(n.y,pl.y+n.oR*Math.sin(n.oAngle),0.22); }
+  });
+
+  /* faint orbit guides around each sun */
+  moons.forEach(function(n){
+    if(n.alpha<0.08)return;
+    var pl=_neb.nodes[n.sun]; if(!pl)return;
+    ctx.save(); ctx.globalAlpha=n.alpha*0.10;
+    ctx.strokeStyle="rgba(140,170,220,0.8)"; ctx.lineWidth=0.6;
+    ctx.beginPath(); ctx.arc(pl.x,pl.y,n.oR,0,6.283); ctx.stroke();
+    ctx.restore();
+  });
+
+  /* gold tether */
+  planets.forEach(function(n){
+    if(!n.feat||n.alpha<0.05||n.tetherX==null)return;
+    ctx.save(); ctx.globalAlpha=n.alpha*0.42;
+    ctx.strokeStyle="rgba(255,196,0,0.75)"; ctx.lineWidth=1.1;
+    ctx.setLineDash([5,6]); ctx.lineDashOffset=-t*0.02;
+    var dx=n.tetherX-n.x,dy=n.tetherY-n.y,d=Math.hypot(dx,dy)||1,off=(n.r+14)/d;
+    ctx.beginPath(); ctx.moveTo(n.x+dx*off,n.y+dy*off); ctx.lineTo(n.tetherX,n.tetherY); ctx.stroke();
+    ctx.setLineDash([]); ctx.restore();
+  });
+  /* holding → sun dashed lines */
+  moons.forEach(function(mn){
+    if(mn.alpha<0.05)return;
+    var pl=_neb.nodes[mn.sun]; if(!pl)return;
+    var a=Math.max(0.25,Math.abs(mn.score));
+    ctx.save(); ctx.globalAlpha=mn.alpha*(0.10+a*0.22);
+    ctx.strokeStyle=nebRGBA(mn.score,1); ctx.lineWidth=0.6+a*0.9;
+    ctx.setLineDash([3,7]); ctx.lineDashOffset=-t*0.02;
+    ctx.beginPath(); ctx.moveTo(mn.x,mn.y); ctx.lineTo(pl.x,pl.y); ctx.stroke();
+    ctx.setLineDash([]); ctx.restore();
+  });
+  /* same-strategy web (the confluence lines) */
+  var byGrp={};
+  planets.forEach(function(n){
+    if(n.alpha<0.45||n.feat)return;
+    (byGrp[n.grp]=byGrp[n.grp]||[]).push(n);
+  });
+  Object.values(byGrp).forEach(function(list){
+    for(var i2=0;i2<list.length;i2++)for(var j2=i2+1;j2<list.length;j2++){
+      var A=list[i2],B=list[j2];
+      var w=0.55;
+      ctx.save(); ctx.globalAlpha=A.alpha*B.alpha*0.16*w;
+      ctx.strokeStyle=nebRGBA((A.score+B.score)/2||0.001,1); ctx.lineWidth=0.6;
+      ctx.beginPath(); ctx.moveTo(A.x,A.y); ctx.lineTo(B.x,B.y); ctx.stroke();
+      ctx.restore();
+    }
+  });
+  /* suns + the gold pick */
+  planets.forEach(function(n){
+    if(n.alpha<0.02)return;
+    var abs=Math.abs(n.score);
+    if(n.isSun){
+      /* ── ELECTRIC BLUE SUN ─────────────────────────────── */
+      var p1=0.78+0.22*Math.sin(t*0.0016+n.driftPX);
+      var p2=0.82+0.18*Math.sin(t*0.0011+n.driftPY+2.1);
+      /* wide corona */
+      var cor=ctx.createRadialGradient(n.x,n.y,n.r*0.5,n.x,n.y,n.r*3.4*p1);
+      cor.addColorStop(0,"rgba(64,190,255,"+(n.alpha*0.26)+")");
+      cor.addColorStop(0.5,"rgba(40,140,255,"+(n.alpha*0.10)+")");
+      cor.addColorStop(1,"rgba(40,140,255,0)");
+      ctx.fillStyle=cor; ctx.beginPath(); ctx.arc(n.x,n.y,n.r*3.4*p1,0,6.283); ctx.fill();
+      /* inner corona, counter-pulsing */
+      var cor2=ctx.createRadialGradient(n.x,n.y,n.r*0.4,n.x,n.y,n.r*1.9*p2);
+      cor2.addColorStop(0,"rgba(120,220,255,"+(n.alpha*0.30)+")");
+      cor2.addColorStop(1,"rgba(64,190,255,0)");
+      ctx.fillStyle=cor2; ctx.beginPath(); ctx.arc(n.x,n.y,n.r*1.9*p2,0,6.283); ctx.fill();
+      /* body: white-hot core → electric blue → deep blue limb */
+      var sg=ctx.createRadialGradient(n.x-n.r*0.18,n.y-n.r*0.22,n.r*0.05,n.x,n.y,n.r);
+      sg.addColorStop(0,"rgba(235,250,255,"+(n.alpha*0.98)+")");
+      sg.addColorStop(0.35,"rgba(140,225,255,"+(n.alpha*0.95)+")");
+      sg.addColorStop(0.75,"rgba(45,160,255,"+(n.alpha*0.92)+")");
+      sg.addColorStop(1,"rgba(20,80,190,"+(n.alpha*0.85)+")");
+      ctx.fillStyle=sg; ctx.beginPath(); ctx.arc(n.x,n.y,n.r,0,6.283); ctx.fill();
+      /* crackling limb — two thin rims, one animated */
+      ctx.save();
+      ctx.globalAlpha=n.alpha*0.85; ctx.strokeStyle="rgba(150,230,255,0.9)"; ctx.lineWidth=1.4;
+      ctx.beginPath(); ctx.arc(n.x,n.y,n.r,0,6.283); ctx.stroke();
+      ctx.globalAlpha=n.alpha*0.35; ctx.strokeStyle="rgba(90,200,255,0.9)"; ctx.lineWidth=1;
+      ctx.setLineDash([3,9]); ctx.lineDashOffset=-t*0.02;
+      ctx.beginPath(); ctx.arc(n.x,n.y,n.r+4,0,6.283); ctx.stroke();
+      ctx.setLineDash([]);
+      /* slow equatorial flare ellipse, like the original conviction ring */
+      ctx.globalAlpha=n.alpha*0.30; ctx.strokeStyle="rgba(120,215,255,0.85)"; ctx.lineWidth=1.1;
+      ctx.beginPath(); ctx.ellipse(n.x,n.y,n.r*1.75,n.r*0.5,t*0.00018+n.driftPX,0,6.283); ctx.stroke();
+      ctx.restore();
+    }else{
+      /* gold pick body (kept from the score-colored original) */
+      var c=nebRGB(n.score), cr=c[0],cg=c[1],cb=c[2];
+      var grad=ctx.createRadialGradient(n.x-n.r*0.32,n.y-n.r*0.32,n.r*0.08,n.x,n.y,n.r);
+      grad.addColorStop(0,"rgba(100,120,165,"+(n.alpha*0.80)+")");
+      grad.addColorStop(1,"rgba(45,58,90,"+(n.alpha*0.65)+")");
+      ctx.fillStyle=grad; ctx.beginPath(); ctx.arc(n.x,n.y,n.r,0,6.283); ctx.fill();
+    }
+    if(n.feat){
+      var gp=0.80+0.20*Math.sin(t*0.0022+n.driftPY);
+      var aura=ctx.createRadialGradient(n.x,n.y,n.r*0.5,n.x,n.y,n.r*3.6*gp);
+      aura.addColorStop(0,"rgba(255,196,0,"+(n.alpha*0.34)+")");
+      aura.addColorStop(0.5,"rgba(255,170,0,"+(n.alpha*0.12)+")");
+      aura.addColorStop(1,"rgba(255,170,0,0)");
+      ctx.fillStyle=aura; ctx.beginPath(); ctx.arc(n.x,n.y,n.r*3.6*gp,0,6.283); ctx.fill();
+      ctx.save(); ctx.globalAlpha=n.alpha*0.95;
+      ctx.strokeStyle="rgba(255,196,0,0.95)"; ctx.lineWidth=2.2; ctx.setLineDash([6,5]);
+      ctx.beginPath(); ctx.arc(n.x,n.y,n.r+10,0,6.283); ctx.stroke();
+      ctx.globalAlpha=n.alpha*0.35; ctx.lineWidth=1;
+      ctx.setLineDash([2,6]); ctx.lineDashOffset=-t*0.03;
+      ctx.beginPath(); ctx.arc(n.x,n.y,n.r+20*gp,0,6.283); ctx.stroke();
+      ctx.setLineDash([]); ctx.restore();
+    }
+    ctx.save(); ctx.globalAlpha=n.alpha;
+    ctx.textAlign="center"; ctx.textBaseline="middle";
+    if(n.isSun){
+      ctx.fillStyle="#062033";
+      ctx.font="700 "+(n.r>=34?13:11)+"px ui-monospace";
+      ctx.fillText(n.sym,n.x,n.y-(n.r>=22?5:0));
+      if(n.r>=22){
+        ctx.font="600 9px ui-monospace"; ctx.fillStyle="rgba(6,40,64,0.85)";
+        ctx.fillText(fmt(n.val),n.x,n.y+9);
+      }
+    }else{
+      ctx.fillStyle=n.feat?"#ffc400":"#8aa0c8";
+      ctx.font="700 12px ui-monospace";
+      ctx.fillText(n.sym,n.x,n.y);
+      if(n.feat&&n.tag){
+        ctx.fillStyle="rgba(255,196,0,0.92)"; ctx.font="700 9px ui-monospace";
+        ctx.fillText(n.tag,n.x,n.y+n.r+30);
+      }
+    }
+    ctx.restore();
+  });
+  /* moons */
+  moons.forEach(function(n){
+    if(n.alpha<0.02)return;
+    var abs=Math.abs(n.score); var c=nebRGB(n.score);
+    if(abs>0.22){
+      var gl=ctx.createRadialGradient(n.x,n.y,0,n.x,n.y,n.r*2.8);
+      gl.addColorStop(0,"rgba("+c[0]+","+c[1]+","+c[2]+","+(n.alpha*0.50)+")");
+      gl.addColorStop(1,"rgba("+c[0]+","+c[1]+","+c[2]+",0)");
+      ctx.fillStyle=gl; ctx.beginPath(); ctx.arc(n.x,n.y,n.r*2.8,0,6.283); ctx.fill();
+    }
+    /* detailed planet body: lit hemisphere, terminator shadow, specular, atmosphere rim */
+    var og=ctx.createRadialGradient(n.x-n.r*0.34,n.y-n.r*0.34,n.r*0.08,n.x,n.y,n.r);
+    og.addColorStop(0,"rgba("+Math.min(255,c[0]+95)+","+Math.min(255,c[1]+95)+","+Math.min(255,c[2]+75)+","+(n.alpha*0.97)+")");
+    og.addColorStop(0.55,"rgba("+c[0]+","+c[1]+","+c[2]+","+(n.alpha*(0.60+abs*0.35))+")");
+    og.addColorStop(1,"rgba("+Math.max(0,c[0]-70)+","+Math.max(0,c[1]-70)+","+Math.max(0,c[2]-55)+","+(n.alpha*0.75)+")");
+    ctx.fillStyle=og;
+    ctx.beginPath(); ctx.arc(n.x,n.y,n.r,0,6.283); ctx.fill();
+    /* terminator — night side creeping in from the lower right */
+    ctx.save();
+    ctx.beginPath(); ctx.arc(n.x,n.y,n.r,0,6.283); ctx.clip();
+    var night=ctx.createRadialGradient(n.x+n.r*0.55,n.y+n.r*0.55,n.r*0.15,n.x+n.r*0.4,n.y+n.r*0.4,n.r*1.35);
+    night.addColorStop(0,"rgba(5,8,15,"+(n.alpha*0.42)+")");
+    night.addColorStop(0.6,"rgba(5,8,15,"+(n.alpha*0.18)+")");
+    night.addColorStop(1,"rgba(5,8,15,0)");
+    ctx.fillStyle=night; ctx.fillRect(n.x-n.r,n.y-n.r,n.r*2,n.r*2);
+    ctx.restore();
+    /* specular glint on the lit side */
+    if(n.r>=8){
+      ctx.save(); ctx.globalAlpha=n.alpha*0.55;
+      ctx.strokeStyle="rgba(255,255,255,0.85)"; ctx.lineWidth=Math.max(1,n.r*0.09);
+      ctx.beginPath(); ctx.arc(n.x,n.y,n.r*0.72,Math.PI*1.08,Math.PI*1.46); ctx.stroke();
+      ctx.restore();
+    }
+    /* thin atmosphere rim in the P/L color */
+    ctx.save(); ctx.globalAlpha=n.alpha*(0.35+abs*0.4);
+    ctx.strokeStyle="rgba("+Math.min(255,c[0]+60)+","+Math.min(255,c[1]+60)+","+Math.min(255,c[2]+50)+",0.9)";
+    ctx.lineWidth=1;
+    ctx.beginPath(); ctx.arc(n.x,n.y,n.r+0.8,0,6.283); ctx.stroke();
+    ctx.restore();
+    if(n.alpha>0.45){
+      ctx.save(); ctx.globalAlpha=n.alpha*0.92;
+      ctx.fillStyle="#ffffff";
+      ctx.font="600 "+(n.r>=16?10:8.5)+"px ui-monospace";
+      ctx.textAlign="center"; ctx.textBaseline="middle";
+      if(n.r>=13){ ctx.fillText(n.label,n.x,n.y); }
+      else{ ctx.fillText(n.label,n.x,n.y-n.r-6); }
+      if(n.r>=20){
+        ctx.font="500 8px ui-monospace"; ctx.fillStyle="rgba(255,255,255,0.75)";
+        ctx.fillText(fmt(n.val),n.x,n.y+11);
+      }
+      ctx.restore();
+    }
+  });
+  /* status line */
+  var suns=planets.filter(function(n){return n.alpha>0.5&&n.isSun;});
+  var orbs=moons.filter(function(n){return n.alpha>0.5;});
+  var up=orbs.filter(function(n){return n.score>0.12;}).length;
+  var dn=orbs.filter(function(n){return n.score<-0.12;}).length;
+  var el=document.getElementById("neb-status");
+  if(el) el.innerHTML="systems: "+suns.length+" · holdings: "+orbs.length+
+    ' · <span class="up">▲ '+up+'</span> · <span class="dn">▼ '+dn+'</span>';
+  Object.keys(_neb.nodes).forEach(function(id){
+    if(_neb.nodes[id].alpha<0.008&&_neb.nodes[id].tAlpha===0) delete _neb.nodes[id];
+  });
+  requestAnimationFrame(nebRender);
+}
+
+/* tooltip — hover + tap */
+var tt=document.getElementById("tt");
+function showTT(mx,my){
+  var best=null,bestD=Infinity;
+  Object.values(_neb.nodes).forEach(function(n){
+    if(n.alpha<0.3)return;
+    var dx=mx-n.x,dy=my-n.y,d2=dx*dx+dy*dy,th=(n.r+10)*(n.r+10);
+    if(d2<th&&d2<bestD){best=n;bestD=d2;}
+  });
+  if(best&&best.isPlanet){
+    var tot=0; data.forEach(function(p){tot+=p.val;});
+    var s=best.score,cls=s>0.12?"up":(s<-0.12?"dn":"fl");
+    tt.innerHTML="<strong>"+best.sym+"</strong>"+
+      (best.feat?' <span style="color:var(--gold)">· RECOMMENDED BUY</span>':"")+
+      '<br><span style="opacity:.75">'+best.name+"</span>"+
+      "<br>value "+fmt(best.val)+" · "+(100*best.val/tot).toFixed(1)+"% of portfolio"+
+      (best.feat?'':'<br><span class="'+cls+'">P/L '+fmtSigned(best.pl)+"</span>");
+    tt.style.left=Math.min(mx+14,cv.clientWidth-250)+"px";
+    tt.style.top=(my+14)+"px"; tt.style.opacity="1";
+  }else if(best){
+    var tot2=0; data.forEach(function(p){tot2+=p.val;});
+    var s2=best.score,cls2=s2>0.12?"up":(s2<-0.12?"dn":"fl");
+    tt.innerHTML="<strong>"+best.label+"</strong>"+
+      '<br><span style="opacity:.75">'+(best.name||"")+"</span>"+
+      "<br>value "+fmt(best.val)+" · "+(100*best.val/tot2).toFixed(1)+"% of portfolio"+
+      '<br><span class="'+cls2+'">P/L '+fmtSigned(best.pl||0)+"</span>";
+    tt.style.left=Math.min(mx+14,cv.clientWidth-250)+"px";
+    tt.style.top=(my+14)+"px"; tt.style.opacity="1";
+  }else tt.style.opacity="0";
+}
+cv.addEventListener("mousemove",function(e){
+  var r=cv.getBoundingClientRect(); showTT(e.clientX-r.left,e.clientY-r.top);
+});
+cv.addEventListener("mouseleave",function(){tt.style.opacity="0";});
+
+/* ── tap → chart. Holdings & the gold pick open TradingView; suns show the tooltip. */
+function hitNode(mx,my){
+  var best=null,bestD=Infinity;
+  Object.values(_neb.nodes).forEach(function(n){
+    if(n.alpha<0.3)return;
+    var dx=mx-n.x,dy=my-n.y,d2=dx*dx+dy*dy,th=(n.r+10)*(n.r+10);
+    if(d2<th&&d2<bestD){best=n;bestD=d2;}
+  });
+  return best;
+}
+var modal=document.getElementById("chartModal");
+var tvLoaded=false, tvLoadFailed=false;
+function loadTV(cb){
+  if(tvLoaded){cb();return;}
+  if(tvLoadFailed){cb();return;}
+  var s=document.createElement("script");
+  s.src="https://s3.tradingview.com/tv.js";
+  s.onload=function(){tvLoaded=true;cb();};
+  s.onerror=function(){tvLoadFailed=true;cb();};
+  document.head.appendChild(s);
+}
+function openChart(id,name){
+  var sym=TVMAP[id];
+  if(!sym)return false;
+  document.getElementById("chartTitle").textContent=id;
+  document.getElementById("chartSym").textContent=sym;
+  document.getElementById("chartExt").href="https://www.tradingview.com/chart/?symbol="+encodeURIComponent(sym);
+  modal.style.display="flex";
+  var cont=document.getElementById("tvContainer");
+  var fb=document.getElementById("tvFallback");
+  cont.innerHTML=""; fb.style.display="none";
+  loadTV(function(){
+    if(tvLoadFailed||typeof TradingView==="undefined"||!TradingView.widget){
+      fb.style.display="flex"; return;
+    }
+    try{
+      new TradingView.widget({
+        container_id:"tvContainer", autosize:true,
+        symbol:sym, interval:"D", timezone:"Europe/Nicosia",
+        theme:"dark", style:"1", locale:"en",
+        toolbar_bg:"#0d1117", withdateranges:true,
+        hide_side_toolbar:false, allow_symbol_change:true,
+        details:true, studies:[]
+      });
+    }catch(e){ fb.style.display="flex"; }
+  });
+  return true;
+}
+document.getElementById("chartClose").addEventListener("click",function(){
+  modal.style.display="none";
+  document.getElementById("tvContainer").innerHTML="";
+});
+cv.addEventListener("pointerdown",function(e){
+  var r=cv.getBoundingClientRect();
+  var mx=e.clientX-r.left,my=e.clientY-r.top;
+  var best=hitNode(mx,my);
+  if(best&&!best.isSun&&TVMAP[best.sym]){ tt.style.opacity="0"; openChart(best.sym,best.name); }
+  else showTT(mx,my);
+});
+
+function sizeCanvas(){
+  var H=Math.max(430,Math.min(window.innerHeight*0.62,680));
+  cv.style.height=H+"px";
+}
+window.addEventListener("resize",function(){sizeCanvas(); nebUpdate();});
+sizeCanvas(); renderMeta(); renderTable(); nebUpdate(); requestAnimationFrame(nebRender);
+})();
+</script>
+</body>
+</html>
