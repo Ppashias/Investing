@@ -338,10 +338,16 @@ function updateAcct(tot,pl){
   if(e=document.getElementById("acctInv")) e.textContent=fmt2(inv);
   if(e=document.getElementById("acctCash")) e.textContent=fmt2(cash);
   if(e=document.getElementById("acctBtc")) e.textContent=fmt2(btc);
-  /* today's move vs the day's first seen total */
+  /* today's move vs the day's first seen total.
+     Baseline only anchors on LIVE data (or in pure-manual mode), and upgrades
+     itself if it was first seeded from stale local values before the feed woke up. */
   var day=new Date().toDateString();
-  if(AB.d!==day||!AB.v){ AB={d:day,v:tot}; try{localStorage.setItem(ABKEY,JSON.stringify(AB));}catch(_){} }
-  var ch=tot-AB.v, chPct=AB.v?100*ch/AB.v:0;
+  var canBase=(typeof liveOK!=="undefined"&&liveOK)||!(LIVECFG&&LIVECFG.url&&LIVECFG.token);
+  if(canBase&&(AB.d!==day||!AB.v||!AB.live)){
+    AB={d:day,v:tot,live:(typeof liveOK!=="undefined"&&liveOK)};
+    try{localStorage.setItem(ABKEY,JSON.stringify(AB));}catch(_){}
+  }
+  var ch=(AB.d===day&&AB.v)?tot-AB.v:0, chPct=(AB.d===day&&AB.v)?100*ch/AB.v:0;
   if(e=document.getElementById("acct24")){
     e.className="astat "+(Math.abs(ch)<0.005?"fl":(ch>=0?"up":"dn"));
     e.textContent=(ch>=0?"↗ ":"↘ ")+"€"+Math.abs(ch).toLocaleString("en-IE",{minimumFractionDigits:2,maximumFractionDigits:2})+
@@ -353,9 +359,9 @@ function updateAcct(tot,pl){
     e.textContent=(ror>=0?"↗ +":"↘ −")+Math.abs(ror).toFixed(1)+"%";
     e.className="astat "+(ror>=0?"up":"dn");
   }
-  /* 24h history for the sparkline — one point per ≥5 min */
+  /* 24h history for the sparkline — one point per ≥5 min, live (or manual-mode) totals only */
   var now=Date.now();
-  if(!HIST.length||now-HIST[HIST.length-1][0]>=300000){
+  if(canBase&&(!HIST.length||now-HIST[HIST.length-1][0]>=300000)){
     HIST.push([now,tot]);
     var cut=now-25*3600*1000;
     HIST=HIST.filter(function(p){return p[0]>=cut;});
