@@ -1322,6 +1322,13 @@ function applyLive(j){
     else if(j.cash.total!=null)
       PIECASH=Math.max(0,(j.cash.total||0)-(j.cash.free||0)-(j.cash.invested||0)-(j.cash.ppl||0));
     if(PIECASH>0.5) upsert("QUEUED",{val:PIECASH,grp:"queued",name:"Pie cash awaiting order execution"});
+    /* whatever else T212 counts in its headline total but not in any named field —
+       the Spending pot balance and money in transit live here */
+    var resid=0;
+    if(j.cash.pieCash!=null&&j.cash.total!=null)
+      resid=(j.cash.total||0)-(j.cash.free||0)-(j.cash.blocked||0)-(j.cash.invested||0)-(j.cash.ppl||0)-PIECASH;
+    if(resid>0.5) upsert("POTS",{val:resid,grp:"cash",name:"Spending pot / money in transit"});
+    else data=data.filter(function(p){return p.id!=="POTS";});
   }
   /* the live feed is authoritative: drop stale placeholder holdings it no longer reports
      (keeps CASH, QUEUED, and the BTC sleeve, which come from other sources) */
