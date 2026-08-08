@@ -8,7 +8,7 @@
 <meta name="apple-mobile-web-app-title" content="Nebula">
 <meta name="theme-color" content="#05080f">
 <title>Portfolio Nebula — Final Trade style</title>
-<!--BUILD:23-->
+<!--BUILD:24-->
 <style>
   :root{
     color-scheme:dark;
@@ -88,7 +88,7 @@
 <body>
 
 <div class="topline">
-  <div class="brand">Portfolio<em>Nebula</em> <span id="liveStatus" style="font-size:9px;color:var(--dim);font-weight:400">manual</span> <span style="font-size:9px;color:var(--dim);font-weight:400">v23</span></div>
+  <div class="brand">Portfolio<em>Nebula</em> <span id="liveStatus" style="font-size:9px;color:var(--dim);font-weight:400">manual</span> <span style="font-size:9px;color:var(--dim);font-weight:400">v24</span></div>
   <div class="tot"><b id="total">—</b> <span id="delta"></span></div>
 </div>
 
@@ -341,23 +341,88 @@ function rangePts(){
   }
   return pts;
 }
-/* period change stat — follows the selected graph range */
-var LASTTOT=0,LASTDAYCH=0,LASTDAYPCT=0;
+/* ── external cash flows (deposits & withdrawals) — so period stats measure
+      PERFORMANCE, not money you moved in or out. Fetched once from the relay's
+      transaction history (immutable, cached in localStorage), head refreshed on load.
+      TRANSFER (to Spending pot / Crypto) stays inside the tracked total → not a flow. */
+var FKEY="tft-nebula-flows-v1";
+var FLOWS=(function(){try{var s=localStorage.getItem(FKEY);if(s)return JSON.parse(s);}catch(e){}
+  return {items:[],complete:false,cur:null,time:null,oldest:null};})();
+function flowsSave(){ try{localStorage.setItem(FKEY,JSON.stringify(FLOWS));}catch(_){}}
+function flowsAdd(x){
+  var ty=x.type||"";
+  if(ty!=="DEPOSIT"&&ty!=="WITHDRAW")return;
+  var ms=Date.parse(x.dateTime||x.time||""); if(!ms)return;
+  var key=ms+"|"+(x.amount||0);
+  if(FLOWS.items.some(function(f){return f[0]+"|"+f[1]===key;}))return;
+  FLOWS.items.push([ms,x.amount||0]);
+  if(FLOWS.oldest==null||ms<FLOWS.oldest)FLOWS.oldest=ms;
+}
+function flowsParseNext(np){
+  np=String(np||""); if(!np)return {};
+  var qs=np.indexOf("?")>=0?np.split("?")[1]:np;
+  var p=new URLSearchParams(qs);
+  return {cur:p.get("cursor"),time:p.get("time")};
+}
+function flowsPage(cur,time,cb){
+  if(!LIVECFG.url||!LIVECFG.token)return;
+  var u=normUrl(LIVECFG.url)+"/transactions?t="+encodeURIComponent(LIVECFG.token)+"&limit=50"
+    +(cur?"&cursor="+encodeURIComponent(cur):"")+(time?"&time="+encodeURIComponent(time):"");
+  fetch(u).then(function(r){return r.json();}).then(cb).catch(function(_){});
+}
+function flowsBackfill(){
+  if(FLOWS.complete)return;
+  flowsPage(FLOWS.cur,FLOWS.time,function(tx){
+    if(!tx||!tx.items)return;                 /* error / rate limit — try next load */
+    tx.items.forEach(flowsAdd);
+    if(tx.items.length){
+      var last=tx.items[tx.items.length-1];
+      var lms=Date.parse(last.dateTime||last.time||"");
+      if(lms&&(FLOWS.oldest==null||lms<FLOWS.oldest))FLOWS.oldest=lms;
+    }
+    var nx=flowsParseNext(tx.nextPagePath);
+    if(!tx.nextPagePath||!nx.cur){ FLOWS.complete=true; }
+    else{ FLOWS.cur=nx.cur; FLOWS.time=nx.time; }
+    flowsSave(); updateRangeStat();
+    if(!FLOWS.complete) setTimeout(flowsBackfill,12000);  /* respect T212 history rate limits */
+  });
+}
+function flowsRefreshHead(){   /* newest transactions appear at the head — merge them in */
+  flowsPage(null,null,function(tx){
+    if(!tx||!tx.items)return;
+    tx.items.forEach(flowsAdd);
+    flowsSave(); updateRangeStat();
+  });
+}
+function flowsSince(t0){
+  var s=0; FLOWS.items.forEach(function(f){ if(f[0]>t0)s+=f[1]; });
+  return s;
+}
+/* period P/L stat — follows the selected graph range, deposit/withdrawal-adjusted */
+var LASTTOT=0;
 function updateRangeStat(){
   var e=document.getElementById("acct24"); if(!e)return;
   var lab=document.getElementById("acct24Label");
-  var ch,pct,labTxt,pctOk=true;
-  if(RANGE==="1D"){ ch=LASTDAYCH; pct=LASTDAYPCT; labTxt="TODAY"; }
-  else{
-    labTxt=(RANGE==="YTD"?"YTD":RANGE)+" CHANGE";
+  var base,t0,labTxt;
+  if(RANGE==="1D"){
+    labTxt="TODAY P/L";
+    var mid=new Date(); mid.setHours(0,0,0,0); t0=mid.getTime();
+    base=(AB&&AB.d===new Date().toDateString())?AB.v:LASTTOT;
+  }else{
+    labTxt=(RANGE==="YTD"?"YTD":RANGE)+" P/L";
     var pts=rangePts();
-    if(pts.length&&LASTTOT){
-      var base=pts[0][1];
-      ch=LASTTOT-base;
-      if(base>=1){ pct=100*ch/base; } else { pct=0; pctOk=false; }  /* period started near €0 */
-    }else{ ch=0; pct=0; }
+    if(pts.length){ base=pts[0][1]; t0=pts[0][0]; }
+    else{ base=LASTTOT; t0=Date.now(); }
   }
   if(lab)lab.textContent=labTxt;
+  /* if the flow history doesn't reach back to the period start yet, hold off */
+  if(RANGE!=="1D"&&!FLOWS.complete&&(FLOWS.oldest==null||FLOWS.oldest>t0)){
+    e.className="astat fl"; e.textContent="… loading flows"; return;
+  }
+  var net=flowsSince(t0);
+  var ch=LASTTOT-base-net;
+  var denom=base+Math.max(0,net);
+  var pctOk=denom>=1, pct=pctOk?100*ch/denom:0;
   e.className="astat "+(Math.abs(ch)<0.005?"fl":(ch>=0?"up":"dn"));
   e.textContent=(ch>=0?"↗ ":"↘ ")+"€"+Math.abs(ch).toLocaleString("en-IE",{minimumFractionDigits:2,maximumFractionDigits:2})+
     (pctOk?" ("+(pct>=0?"+":"−")+Math.abs(pct).toFixed(2)+"%)":"");
@@ -444,8 +509,7 @@ function updateAcct(tot,pl){
     AB={d:day,v:tot,live:(typeof liveOK!=="undefined"&&liveOK)};
     try{localStorage.setItem(ABKEY,JSON.stringify(AB));}catch(_){}
   }
-  var ch=(AB.d===day&&AB.v)?tot-AB.v:0, chPct=(AB.d===day&&AB.v)?100*ch/AB.v:0;
-  LASTTOT=tot; LASTDAYCH=ch; LASTDAYPCT=chPct;
+  LASTTOT=tot;
   updateRangeStat();
   /* rate of return: total unrealised P/L over cost */
   var cost=tot-pl, ror=cost>0?100*pl/cost:0;
@@ -1420,8 +1484,9 @@ document.getElementById("cfgSave").addEventListener("click",function(){
   pollT212(); pollBTC();
 });
 pollT212(); pollBTC();   /* poll immediately on load — don't wait for the first interval */
+setTimeout(flowsRefreshHead,2000); setTimeout(flowsBackfill,8000);
 /* self-updater: check the server copy every 3 min; offer one-tap refresh when newer */
-var BUILD=23;
+var BUILD=24;
 function checkUpdate(){
   if(typeof location==="undefined")return;
   fetch(location.pathname+"?upd="+Date.now(),{cache:"no-store"})
