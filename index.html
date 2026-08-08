@@ -289,7 +289,8 @@ function planetTexture(sym,r,c){
 /* ───────────────────────── header / table ───────────────────────── */
 var editing=false;
 /* ── ACCOUNT VALUE hero: totals, today's move, return %, pots, 24h sparkline ── */
-var ABKEY="tft-nebula-acctbase-v1", HKEY="tft-nebula-hist-v1";
+var PIECASH=0;   /* pie cash awaiting execution, from the live feed */
+var ABKEY="tft-nebula-acctbase-v2", HKEY="tft-nebula-hist-v2";
 var AB=(function(){try{var s=localStorage.getItem(ABKEY);if(s)return JSON.parse(s);}catch(e){}return{d:"",v:0};})();
 var HIST=(function(){try{var s=localStorage.getItem(HKEY);if(s)return JSON.parse(s);}catch(e){}return[];})();
 function drawSpark(){
@@ -302,7 +303,8 @@ function drawSpark(){
   var g=sc.getContext("2d"); g.setTransform(dpr,0,0,dpr,0,0);
   var cut=Date.now()-24*3600*1000;
   var pts=HIST.filter(function(p){return p[0]>=cut;});
-  if(pts.length<2)return;
+  if(!pts.length)return;
+  if(pts.length===1) pts=[[pts[0][0]-60000,pts[0][1]],[Date.now(),pts[0][1]]];
   var lo=Infinity,hi=-Infinity;
   pts.forEach(function(p){if(p[1]<lo)lo=p[1];if(p[1]>hi)hi=p[1];});
   if(hi-lo<1){hi+=1;lo-=1;}
@@ -333,9 +335,11 @@ function updateAcct(tot,pl){
     else if(p.grp==="btc")btc+=p.val;
     else inv+=p.val;
   });
+  inv+=PIECASH;   /* match T212: queued pie cash counts as Investments */
   var e;
   if(e=document.getElementById("acctVal")) e.textContent=fmt2(tot);
-  if(e=document.getElementById("acctInv")) e.textContent=fmt2(inv);
+  if(e=document.getElementById("acctInv")) e.innerHTML=fmt2(inv)+
+    (PIECASH>0.01?' <span class="tag">incl. '+fmt2(PIECASH)+' queued</span>':"");
   if(e=document.getElementById("acctCash")) e.textContent=fmt2(cash);
   if(e=document.getElementById("acctBtc")) e.textContent=fmt2(btc);
   /* today's move vs the day's first seen total.
@@ -359,19 +363,20 @@ function updateAcct(tot,pl){
     e.textContent=(ror>=0?"↗ +":"↘ −")+Math.abs(ror).toFixed(1)+"%";
     e.className="astat "+(ror>=0?"up":"dn");
   }
-  /* 24h history for the sparkline — one point per ≥5 min, live (or manual-mode) totals only */
+  /* 24h history for the sparkline — one point per minute, live (or manual-mode) totals only */
   var now=Date.now();
-  if(canBase&&(!HIST.length||now-HIST[HIST.length-1][0]>=300000)){
+  if(canBase&&(!HIST.length||now-HIST[HIST.length-1][0]>=60000)){
     HIST.push([now,tot]);
     var cut=now-25*3600*1000;
     HIST=HIST.filter(function(p){return p[0]>=cut;});
-    if(HIST.length>400)HIST=HIST.slice(-400);
+    if(HIST.length>600)HIST=HIST.slice(-600);
     try{localStorage.setItem(HKEY,JSON.stringify(HIST));}catch(_){}
   }
   drawSpark();
 }
 function renderMeta(){
   var tot=0,pl=0; data.forEach(function(p){tot+=p.val; pl+=(p.pl||0);});
+  tot+=PIECASH;
   document.getElementById("total").textContent=fmt(tot);
   var d=document.getElementById("delta");
   d.textContent=fmtSigned(pl); d.className=pl>=0?"up":"dn";
@@ -1233,7 +1238,10 @@ function applyLive(j){
     if(m){ upsert(m[1],{val:val,pl:pl,grp:m[2]}); }
     else { upsert((pos.ticker||"?").replace(/_.*/,""),{val:val,pl:pl,grp:"other",name:pos.ticker}); }
   });
-  if(j.cash&&j.cash.free!=null) upsert("CASH",{val:j.cash.free,grp:"cash"});
+  if(j.cash&&j.cash.free!=null){
+    upsert("CASH",{val:(j.cash.free||0)+(j.cash.blocked||0),grp:"cash"});
+    PIECASH=j.cash.pieCash||0;   /* money queued inside pies — T212 counts it as Investments */
+  }
   renderMeta(); renderTable(); nebUpdate();
 }
 function pollT212(){
