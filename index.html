@@ -50,7 +50,11 @@
   .astat{font-size:14px;font-weight:700;margin-top:3px;font-variant-numeric:tabular-nums}
   .pot{background:#101725;border:1px solid var(--border);border-radius:10px;padding:10px 12px}
   .pval{font-size:16px;font-weight:700;color:#e6edf3;margin-top:3px;font-variant-numeric:tabular-nums}
-  #spark{width:100%;height:44px;display:block;margin-top:8px}
+  #spark{width:100%;height:58px;display:block;margin-top:8px}
+  .rangerow{display:flex;gap:5px;margin-top:8px;flex-wrap:wrap}
+  .rbtn{background:#0d1420;color:var(--dim);border:1px solid var(--border);border-radius:7px;
+    padding:3px 8px;font-size:10px;font-weight:700;font-family:inherit}
+  .rbtn.sel{color:#8ecdff;border-color:#2c4a6e;background:#13223a}
   /* header strip */
   .topline{display:flex; justify-content:space-between; align-items:center; padding:12px 14px 0}
   .topline .brand{font-size:13px; font-weight:700; color:#e6edf3}
@@ -100,6 +104,9 @@
         <div class="alabel">INVESTMENTS</div>
         <div id="acctInv" class="pval">—</div>
         <canvas id="spark"></canvas>
+        <div class="rangerow" id="rangeRow">
+          <button class="rbtn" data-r="1D">1D</button><button class="rbtn" data-r="1W">1W</button><button class="rbtn" data-r="1M">1M</button><button class="rbtn" data-r="3M">3M</button><button class="rbtn" data-r="1Y">1Y</button><button class="rbtn" data-r="YTD">YTD</button>
+        </div>
       </div>
       <div style="flex:1;min-width:125px;display:flex;flex-direction:column;gap:10px">
         <div class="pot" style="flex:1"><div class="alabel">CASH POT</div><div id="acctCash" class="pval">—</div></div>
@@ -290,37 +297,70 @@ function planetTexture(sym,r,c){
 var editing=false;
 /* ── ACCOUNT VALUE hero: totals, today's move, return %, pots, 24h sparkline ── */
 var PIECASH=0;   /* pie cash awaiting execution, from the live feed */
-var ABKEY="tft-nebula-acctbase-v3", HKEY="tft-nebula-hist-v3";
+var ABKEY="tft-nebula-acctbase-v3", HKEY="tft-nebula-hist-v3", DKEY="tft-nebula-daily-v1", RKEY="tft-nebula-range-v1";
 var AB=(function(){try{var s=localStorage.getItem(ABKEY);if(s)return JSON.parse(s);}catch(e){}return{d:"",v:0};})();
 var HIST=(function(){try{var s=localStorage.getItem(HKEY);if(s)return JSON.parse(s);}catch(e){}return[];})();
+var DAILY=(function(){try{var s=localStorage.getItem(DKEY);if(s)return JSON.parse(s);}catch(e){}return[];})();
+var RANGE=(function(){try{return localStorage.getItem(RKEY)||"1D";}catch(e){return "1D";}})();
+function rangeCutoff(r){
+  var now=Date.now();
+  if(r==="1W")return now-7*864e5;
+  if(r==="1M")return now-31*864e5;
+  if(r==="3M")return now-92*864e5;
+  if(r==="1Y")return now-365*864e5;
+  if(r==="YTD"){var d=new Date();return new Date(d.getFullYear(),0,1).getTime();}
+  return now-24*3600*1000;   /* 1D */
+}
 function drawSpark(){
   var sc=document.getElementById("spark");
   if(!sc||!sc.getContext)return;
   var dpr=Math.min((window.devicePixelRatio||1),2);
-  var w=sc.clientWidth||200,h=sc.clientHeight||44;
+  var w=sc.clientWidth||200,h=sc.clientHeight||58;
   if(!w||!h)return;
   sc.width=Math.round(w*dpr); sc.height=Math.round(h*dpr);
   var g=sc.getContext("2d"); g.setTransform(dpr,0,0,dpr,0,0);
-  var cut=Date.now()-24*3600*1000;
-  var pts=HIST.filter(function(p){return p[0]>=cut;});
+  var cut=rangeCutoff(RANGE);
+  /* 1D reads the per-minute series; longer ranges read the one-point-per-day series,
+     padded with the minute series while the daily history is still young */
+  var pts;
+  if(RANGE==="1D") pts=HIST.filter(function(p){return p[0]>=cut;});
+  else{
+    pts=DAILY.filter(function(p){return p[0]>=cut;}).map(function(p){return [p[0],p[1]];});
+    if(pts.length<2){
+      var merged=pts.concat(HIST.filter(function(p){return p[0]>=cut;}));
+      merged.sort(function(a,b){return a[0]-b[0];});
+      pts=merged;
+    }
+  }
   if(!pts.length)return;
   if(pts.length===1) pts=[[pts[0][0]-60000,pts[0][1]],[Date.now(),pts[0][1]]];
+  var plotB=h-12;   /* reserve a strip for time labels */
   var lo=Infinity,hi=-Infinity;
   pts.forEach(function(p){if(p[1]<lo)lo=p[1];if(p[1]>hi)hi=p[1];});
   if(hi-lo<1){hi+=1;lo-=1;}
   var pad=(hi-lo)*0.15; lo-=pad; hi+=pad;
   var t0=pts[0][0], t1=pts[pts.length-1][0], span=Math.max(1,t1-t0);
   var X=function(p){return (p[0]-t0)/span*(w-4)+2;};
-  var Y=function(p){return h-3-(p[1]-lo)/(hi-lo)*(h-6);};
-  /* faint vertical gridlines like the T212 card */
+  var Y=function(p){return plotB-3-(p[1]-lo)/(hi-lo)*(plotB-6);};
+  /* faint vertical gridlines + time labels, like the T212 card */
   g.strokeStyle="rgba(140,170,220,0.10)"; g.lineWidth=1;
-  for(var gi=1;gi<5;gi++){ g.beginPath(); g.moveTo(w*gi/5,2); g.lineTo(w*gi/5,h-2); g.stroke(); }
+  g.fillStyle="rgba(90,107,140,0.9)"; g.font="500 8px ui-monospace,monospace"; g.textAlign="center";
+  for(var gi=1;gi<5;gi++){
+    var gx=w*gi/5;
+    g.beginPath(); g.moveTo(gx,2); g.lineTo(gx,plotB); g.stroke();
+    if(gi%2===1||RANGE==="1D"){
+      var lt=new Date(t0+span*gi/5);
+      var lbl=RANGE==="1D"?lt.toTimeString().slice(0,5)
+             :lt.toLocaleDateString("en-GB",{day:"numeric",month:"short"});
+      g.fillText(lbl,gx,h-3);
+    }
+  }
   /* soft under-glow */
-  var fillg=g.createLinearGradient(0,0,0,h);
+  var fillg=g.createLinearGradient(0,0,0,plotB);
   fillg.addColorStop(0,"rgba(64,160,255,0.18)"); fillg.addColorStop(1,"rgba(64,160,255,0)");
-  g.beginPath(); g.moveTo(X(pts[0]),h-2);
+  g.beginPath(); g.moveTo(X(pts[0]),plotB-1);
   pts.forEach(function(p){g.lineTo(X(p),Y(p));});
-  g.lineTo(X(pts[pts.length-1]),h-2); g.closePath();
+  g.lineTo(X(pts[pts.length-1]),plotB-1); g.closePath();
   g.fillStyle=fillg; g.fill();
   /* the line */
   g.strokeStyle="#3fa2ff"; g.lineWidth=2; g.lineJoin="round"; g.lineCap="round";
@@ -328,6 +368,20 @@ function drawSpark(){
   pts.forEach(function(p,i){ i?g.lineTo(X(p),Y(p)):g.moveTo(X(p),Y(p)); });
   g.stroke();
 }
+/* range buttons */
+(function(){
+  var row=document.getElementById("rangeRow"); if(!row||!row.querySelectorAll)return;
+  var btns=row.querySelectorAll(".rbtn");
+  function mark(){ btns.forEach(function(b){ b.classList.toggle("sel",b.dataset.r===RANGE); }); }
+  btns.forEach(function(b){
+    b.addEventListener("click",function(){
+      RANGE=b.dataset.r;
+      try{localStorage.setItem(RKEY,RANGE);}catch(_){}
+      mark(); drawSpark();
+    });
+  });
+  mark();
+})();
 function updateAcct(tot,pl){
   var inv=0,cash=0,btc=0;
   data.forEach(function(p){
@@ -371,6 +425,14 @@ function updateAcct(tot,pl){
     HIST=HIST.filter(function(p){return p[0]>=cut;});
     if(HIST.length>600)HIST=HIST.slice(-600);
     try{localStorage.setItem(HKEY,JSON.stringify(HIST));}catch(_){}
+  }
+  /* long-term series: one point per calendar day (today's point tracks the latest value) */
+  if(canBase){
+    var dk=new Date().toDateString();
+    if(DAILY.length&&DAILY[DAILY.length-1][2]===dk) DAILY[DAILY.length-1]=[now,tot,dk];
+    else DAILY.push([now,tot,dk]);
+    if(DAILY.length>750)DAILY=DAILY.slice(-750);
+    try{localStorage.setItem(DKEY,JSON.stringify(DAILY));}catch(_){}
   }
   drawSpark();
 }
