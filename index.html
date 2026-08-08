@@ -690,6 +690,27 @@ function nebRender(){
     ctx.lineWidth=1;
     ctx.beginPath(); ctx.arc(n.x,n.y,n.r+0.8,0,6.283); ctx.stroke();
     ctx.restore();
+    /* P/L activity ring: arc fills with gain/loss %, full ring = ±10% */
+    var plPct=(n.val&&n.val!==n.pl)?(100*(n.pl||0)/Math.max(1,n.val-(n.pl||0))):0;
+    if(Math.abs(plPct)>=0.05 && n.r>=6){
+      var ringR=n.r+3.5;
+      var sweep=Math.min(1,Math.abs(plPct)/10)*6.283;
+      ctx.save();
+      /* faint track */
+      ctx.globalAlpha=n.alpha*0.18;
+      ctx.strokeStyle="rgba(140,170,220,0.9)"; ctx.lineWidth=2;
+      ctx.beginPath(); ctx.arc(n.x,n.y,ringR,0,6.283); ctx.stroke();
+      /* filled arc — clockwise from 12 o'clock for gains, counter-clockwise for losses */
+      ctx.globalAlpha=n.alpha*0.9;
+      ctx.strokeStyle=plPct>0?"rgba(63,185,80,0.95)":"rgba(248,81,73,0.95)";
+      ctx.lineWidth=2; ctx.lineCap="round";
+      ctx.beginPath();
+      if(plPct>0) ctx.arc(n.x,n.y,ringR,-1.5708,-1.5708+sweep);
+      else ctx.arc(n.x,n.y,ringR,-1.5708-sweep,-1.5708);
+      ctx.stroke();
+      ctx.lineCap="butt";
+      ctx.restore();
+    }
     if(n.alpha>0.45){
       ctx.save(); ctx.globalAlpha=n.alpha*0.92;
       ctx.fillStyle="#ffffff";
