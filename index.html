@@ -98,7 +98,11 @@
 </div>
 
 <div class="card">
-  <div class="card-head"><h3>Holdings</h3>
+  <div class="card-head"><h3>Holdings
+      <select id="grpFilter" style="margin-left:10px;background:#161d29;color:#c9d1d9;border:1px solid var(--border);border-radius:8px;padding:6px 8px;font-size:11.5px;font-weight:600;font-family:inherit">
+        <option value="ALL">ALL</option>
+      </select>
+    </h3>
     <div class="btnrow" style="padding:0">
       <button id="editBtn">Edit</button><button id="ioBtn">Backup</button><button id="liveBtn">Live</button>
     </div>
@@ -198,10 +202,35 @@ function renderMeta(){
   var d=document.getElementById("delta");
   d.textContent=fmtSigned(pl); d.className=pl>=0?"up":"dn";
 }
+var grpFilter="ALL";
+var GROUP_LABELS={core:"Core",comp:"Compounding",div:"Dividend",btc:"BTC",cash:"Cash",dip:"Dip buys",other:"Other"};
+function renderFilterOptions(){
+  var sel=document.getElementById("grpFilter"); if(!sel)return;
+  var present={}; data.forEach(function(p){present[p.grp]=1;});
+  sel.innerHTML='<option value="ALL">ALL</option>';
+  Object.keys(GROUPS).forEach(function(g){
+    if(!present[g])return;
+    var o=document.createElement("option");
+    o.value=g; o.textContent=GROUP_LABELS[g]||GROUPS[g].label;
+    sel.appendChild(o);
+  });
+  sel.value=(grpFilter==="ALL"||present[grpFilter])?grpFilter:"ALL";
+}
 function renderTable(){
   var t=document.getElementById("tbl"); t.innerHTML="";
+  renderFilterOptions();
   var tot=0; data.forEach(function(p){tot+=p.val;});
-  data.slice().sort(function(a,b){return b.val-a.val;}).forEach(function(p){
+  var rows=data.slice().sort(function(a,b){return b.val-a.val;});
+  if(grpFilter!=="ALL") rows=rows.filter(function(p){return p.grp===grpFilter;});
+  var ftot=0,fpl=0; rows.forEach(function(p){ftot+=p.val; fpl+=(p.pl||0);});
+  if(grpFilter!=="ALL"){
+    var hr=document.createElement("tr");
+    hr.innerHTML='<td><strong>'+(GROUP_LABELS[grpFilter]||grpFilter)+'</strong> <span class="tag">subtotal</span></td>'+
+      '<td class="val">'+fmt2(ftot)+' <span class="'+(fpl>=0?"up":"dn")+'">'+fmtSigned(fpl)+'</span>'+
+      ' <span class="tag">'+(tot?(100*ftot/tot).toFixed(1):"0.0")+'%</span></td>';
+    t.appendChild(hr);
+  }
+  rows.forEach(function(p){
     var s=plScore(p), cls=s>0.12?"up":(s<-0.12?"dn":"fl");
     var tr=document.createElement("tr");
     var val = editing
@@ -224,6 +253,9 @@ function renderTable(){
     });
   }
 }
+document.getElementById("grpFilter").addEventListener("change",function(){
+  grpFilter=this.value; renderTable();
+});
 document.getElementById("editBtn").addEventListener("click",function(){
   editing=!editing; this.textContent=editing?"Done":"Edit";
   this.classList.toggle("primary",editing); renderTable();
