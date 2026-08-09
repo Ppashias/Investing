@@ -8,7 +8,7 @@
 <meta name="apple-mobile-web-app-title" content="Nebula">
 <meta name="theme-color" content="#05080f">
 <title>Portfolio Nebula — Final Trade style</title>
-<!--BUILD:24-->
+<!--BUILD:25-->
 <style>
   :root{
     color-scheme:dark;
@@ -88,7 +88,7 @@
 <body>
 
 <div class="topline">
-  <div class="brand">Portfolio<em>Nebula</em> <span id="liveStatus" style="font-size:9px;color:var(--dim);font-weight:400">manual</span> <span style="font-size:9px;color:var(--dim);font-weight:400">v24</span></div>
+  <div class="brand">Portfolio<em>Nebula</em> <span id="liveStatus" style="font-size:9px;color:var(--dim);font-weight:400">manual</span> <span style="font-size:9px;color:var(--dim);font-weight:400">v25</span></div>
   <div class="tot"><b id="total">—</b> <span id="delta"></span></div>
 </div>
 
@@ -368,12 +368,18 @@ function flowsPage(cur,time,cb){
   if(!LIVECFG.url||!LIVECFG.token)return;
   var u=normUrl(LIVECFG.url)+"/transactions?t="+encodeURIComponent(LIVECFG.token)+"&limit=50"
     +(cur?"&cursor="+encodeURIComponent(cur):"")+(time?"&time="+encodeURIComponent(time):"");
-  fetch(u).then(function(r){return r.json();}).then(cb).catch(function(_){});
+  fetch(u).then(function(r){return r.json();}).then(cb).catch(function(_){ cb(null); });
+}
+var _flowsTimer=null;
+function scheduleFlows(ms){
+  if(FLOWS.complete)return;
+  if(_flowsTimer)clearTimeout(_flowsTimer);
+  _flowsTimer=setTimeout(function(){_flowsTimer=null;flowsBackfill();},ms);
 }
 function flowsBackfill(){
   if(FLOWS.complete)return;
   flowsPage(FLOWS.cur,FLOWS.time,function(tx){
-    if(!tx||!tx.items)return;                 /* error / rate limit — try next load */
+    if(!tx||!tx.items){ scheduleFlows(20000); return; }   /* error / rate limit — retry */
     tx.items.forEach(flowsAdd);
     if(tx.items.length){
       var last=tx.items[tx.items.length-1];
@@ -384,7 +390,7 @@ function flowsBackfill(){
     if(!tx.nextPagePath||!nx.cur){ FLOWS.complete=true; }
     else{ FLOWS.cur=nx.cur; FLOWS.time=nx.time; }
     flowsSave(); updateRangeStat();
-    if(!FLOWS.complete) setTimeout(flowsBackfill,12000);  /* respect T212 history rate limits */
+    scheduleFlows(11000);   /* respect T212 history rate limits */
   });
 }
 function flowsRefreshHead(){   /* newest transactions appear at the head — merge them in */
@@ -417,7 +423,7 @@ function updateRangeStat(){
   if(lab)lab.textContent=labTxt;
   /* if the flow history doesn't reach back to the period start yet, hold off */
   if(RANGE!=="1D"&&!FLOWS.complete&&(FLOWS.oldest==null||FLOWS.oldest>t0)){
-    e.className="astat fl"; e.textContent="… loading flows"; return;
+    e.className="astat fl"; e.textContent="… syncing history (≈1 min)"; return;
   }
   var net=flowsSince(t0);
   var ch=LASTTOT-base-net;
@@ -1436,6 +1442,7 @@ function pollT212(){
     .then(function(j){
       liveOK=true; applyLive(j);
       var ts=new Date(); setStatus("LIVE "+ts.toTimeString().slice(0,8),true);
+      if(!FLOWS.complete&&!_flowsTimer) scheduleFlows(2000);  /* keep the history sync alive */
     })
     .catch(function(e){ liveOK=false; setStatus("live error: "+(e&&e.message||"network"),false); });
 }
@@ -1486,7 +1493,7 @@ document.getElementById("cfgSave").addEventListener("click",function(){
 pollT212(); pollBTC();   /* poll immediately on load — don't wait for the first interval */
 setTimeout(flowsRefreshHead,2000); setTimeout(flowsBackfill,8000);
 /* self-updater: check the server copy every 3 min; offer one-tap refresh when newer */
-var BUILD=24;
+var BUILD=25;
 function checkUpdate(){
   if(typeof location==="undefined")return;
   fetch(location.pathname+"?upd="+Date.now(),{cache:"no-store"})
