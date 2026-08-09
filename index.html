@@ -8,7 +8,7 @@
 <meta name="apple-mobile-web-app-title" content="Nebula">
 <meta name="theme-color" content="#05080f">
 <title>Portfolio Nebula — Final Trade style</title>
-<!--BUILD:25-->
+<!--BUILD:26-->
 <style>
   :root{
     color-scheme:dark;
@@ -88,7 +88,7 @@
 <body>
 
 <div class="topline">
-  <div class="brand">Portfolio<em>Nebula</em> <span id="liveStatus" style="font-size:9px;color:var(--dim);font-weight:400">manual</span> <span style="font-size:9px;color:var(--dim);font-weight:400">v25</span></div>
+  <div class="brand">Portfolio<em>Nebula</em> <span id="liveStatus" style="font-size:9px;color:var(--dim);font-weight:400">manual</span> <span style="font-size:9px;color:var(--dim);font-weight:400">v26</span></div>
   <div class="tot"><b id="total">—</b> <span id="delta"></span></div>
 </div>
 
@@ -421,17 +421,26 @@ function updateRangeStat(){
     else{ base=LASTTOT; t0=Date.now(); }
   }
   if(lab)lab.textContent=labTxt;
+  var er=document.getElementById("acctRor");
   /* if the flow history doesn't reach back to the period start yet, hold off */
   if(RANGE!=="1D"&&!FLOWS.complete&&(FLOWS.oldest==null||FLOWS.oldest>t0)){
-    e.className="astat fl"; e.textContent="… syncing history (≈1 min)"; return;
+    e.className="astat fl"; e.textContent="… syncing history (≈1 min)";
+    if(er){ er.className="astat fl"; er.textContent="…"; }
+    return;
   }
   var net=flowsSince(t0);
   var ch=LASTTOT-base-net;
   var denom=base+Math.max(0,net);
   var pctOk=denom>=1, pct=pctOk?100*ch/denom:0;
   e.className="astat "+(Math.abs(ch)<0.005?"fl":(ch>=0?"up":"dn"));
-  e.textContent=(ch>=0?"↗ ":"↘ ")+"€"+Math.abs(ch).toLocaleString("en-IE",{minimumFractionDigits:2,maximumFractionDigits:2})+
-    (pctOk?" ("+(pct>=0?"+":"−")+Math.abs(pct).toFixed(2)+"%)":"");
+  e.textContent=(ch>=0?"↗ ":"↘ ")+"€"+Math.abs(ch).toLocaleString("en-IE",{minimumFractionDigits:2,maximumFractionDigits:2});
+  /* RATE OF RETURN mirrors the same period as a percentage */
+  if(er){
+    if(pctOk){
+      er.textContent=(pct>=0?"↗ +":"↘ −")+Math.abs(pct).toFixed(2)+"%";
+      er.className="astat "+(Math.abs(pct)<0.005?"fl":(pct>=0?"up":"dn"));
+    }else{ er.textContent="—"; er.className="astat fl"; }
+  }
 }
 function drawSpark(){
   var sc=document.getElementById("spark");
@@ -516,13 +525,7 @@ function updateAcct(tot,pl){
     try{localStorage.setItem(ABKEY,JSON.stringify(AB));}catch(_){}
   }
   LASTTOT=tot;
-  updateRangeStat();
-  /* rate of return: total unrealised P/L over cost */
-  var cost=tot-pl, ror=cost>0?100*pl/cost:0;
-  if(e=document.getElementById("acctRor")){
-    e.textContent=(ror>=0?"↗ +":"↘ −")+Math.abs(ror).toFixed(1)+"%";
-    e.className="astat "+(ror>=0?"up":"dn");
-  }
+  updateRangeStat();   /* also drives RATE OF RETURN — both follow the selected period */
   /* 24h history for the sparkline — one point per minute, live (or manual-mode) totals only */
   var now=Date.now();
   if(canBase&&(!HIST.length||now-HIST[HIST.length-1][0]>=60000)){
@@ -1493,7 +1496,7 @@ document.getElementById("cfgSave").addEventListener("click",function(){
 pollT212(); pollBTC();   /* poll immediately on load — don't wait for the first interval */
 setTimeout(flowsRefreshHead,2000); setTimeout(flowsBackfill,8000);
 /* self-updater: check the server copy every 3 min; offer one-tap refresh when newer */
-var BUILD=25;
+var BUILD=26;
 function checkUpdate(){
   if(typeof location==="undefined")return;
   fetch(location.pathname+"?upd="+Date.now(),{cache:"no-store"})
