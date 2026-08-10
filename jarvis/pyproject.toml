@@ -33,6 +33,15 @@ dependencies = [
 
 [project.optional-dependencies]
 keyring = ["keyring>=25.0"]
+# Browser control (Phase 4). An extra rather than a hard dependency: Playwright
+# pulls a browser download behind it, and a JARVIS that never browses should not
+# be unable to start without one. jarvis.browser.capabilities.detect reports its
+# absence as an unavailable capability with the install command in the reason,
+# which is the same shape Phase 3 uses for a missing display.
+#
+# Installing the package is not enough on its own — `playwright install chromium`
+# fetches the browser, and detection says so when it is missing.
+browser = ["playwright>=1.40"]
 dev = ["pytest>=8", "pytest-asyncio>=0.23", "anyio>=4"]
 
 [build-system]

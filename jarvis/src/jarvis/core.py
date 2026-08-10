@@ -15,6 +15,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from jarvis.activity.service import ActivityBus
+from jarvis.browser import BrowserService, BrowserSettings
 from jarvis.config import Settings, get_settings
 from jarvis.computer.service import ComputerService, ComputerSettings
 from jarvis.context.manager import ContextBudget
@@ -45,6 +46,9 @@ class JarvisCore:
     orchestrator: Orchestrator
     embeddings: EmbeddingProvider
     computer: ComputerService
+    #: Phase 4. Constructed at build time but deliberately not started: no
+    #: Chromium process exists until something actually asks to browse.
+    browser: BrowserService
 
     # ── lifecycle ────────────────────────────────────────────────────────────
 
@@ -78,6 +82,22 @@ class JarvisCore:
                 task_timeout_seconds=settings.computer_task_timeout_seconds,
             ),
             router=router,
+            activity_bus=bus,
+        )
+
+        # Constructed, not started. ``BrowserService.__init__`` does no I/O and
+        # launches nothing; the first Chromium process appears on first use.
+        browser = BrowserService(
+            BrowserSettings(
+                enabled=settings.browser_enabled,
+                executable_path=settings.browser_executable_path,
+                headless=settings.browser_headless,
+                launch_timeout_seconds=settings.browser_launch_timeout_seconds,
+                navigation_timeout_seconds=settings.browser_navigation_timeout_seconds,
+                max_pages=settings.browser_max_pages,
+                storage_dir=settings.browser_storage_dir,
+                launch_args=tuple(settings.browser_launch_args),
+            ),
             activity_bus=bus,
         )
 
@@ -116,6 +136,7 @@ class JarvisCore:
             orchestrator=orchestrator,
             embeddings=embeddings,
             computer=computer,
+            browser=browser,
         )
 
     async def startup(self, *, create_schema: bool = False) -> None:
@@ -150,6 +171,11 @@ class JarvisCore:
 
     async def shutdown(self) -> None:
         self.computer.shutdown()
+        # Before the providers and the database, and unconditionally: if a
+        # browser was launched it is a real OS process, and a JARVIS that exits
+        # without closing it leaves Chromium running with nobody owning it.
+        # A no-op when nothing launched, which is the usual case.
+        await self.browser.shutdown()
         await self.providers.aclose()
         await self.database.dispose()
         log.info("jarvis_stopped")

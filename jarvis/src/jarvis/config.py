@@ -169,6 +169,25 @@ class Settings(BaseSettings):
     computer_max_steps: int = 25
     computer_task_timeout_seconds: float = 300.0
 
+    # ── browser control (Phase 4) ────────────────────────────────────────────
+    #: Master switch. Independent of ``computer_enabled``: a browser is not the
+    #: desktop, and on Windows the browser works where desktop control does not.
+    browser_enabled: bool = True
+    #: Explicit Chromium binary. Unset — the normal case — lets Playwright
+    #: resolve its own, which is what ``playwright install chromium`` provides.
+    browser_executable_path: Path | None = None
+    browser_headless: bool = True
+    browser_launch_timeout_seconds: float = 30.0
+    browser_navigation_timeout_seconds: float = 20.0
+    browser_max_pages: int = 5
+    #: Where browsing state persists. Unset — the default — means the context
+    #: is ephemeral: cookies and logins die with the session. Setting it is an
+    #: explicit decision to let JARVIS stay logged in between sessions.
+    browser_storage_dir: Path | None = None
+    #: Extra Chromium flags. ``--no-sandbox`` belongs here on machines that
+    #: cannot use the browser's sandbox, and deliberately is not a default.
+    browser_launch_args: list[str] = Field(default_factory=list)
+
     # ── API auth ─────────────────────────────────────────────────────────────
     #: When set, every non-health request must present this token. JARVIS binds
     #: to loopback, but loopback is shared with every other process on the
@@ -240,6 +259,16 @@ class Settings(BaseSettings):
                 "write_files": self.computer_write_files,
                 "delete_files": self.computer_delete_files,
                 "screenshot_retention": self.computer_screenshot_retain,
+            },
+            "browser": {
+                "enabled": self.browser_enabled,
+                "headless": self.browser_headless,
+                "max_pages": self.browser_max_pages,
+                # Whether state persists, never where. The same reasoning as
+                # the vault path above: a directory layout is the operator's
+                # business and this dict goes over the API.
+                "persists_storage": self.browser_storage_dir is not None,
+                "executable_configured": self.browser_executable_path is not None,
             },
         }
 

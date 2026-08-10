@@ -26,6 +26,7 @@ os.environ["JARVIS_LOG_LEVEL"] = "CRITICAL"
 os.environ["JARVIS_DATABASE_URL"] = "sqlite+aiosqlite:///:memory:"
 
 from jarvis.activity.service import ActivityBus  # noqa: E402
+from jarvis.browser import BrowserService, BrowserSettings  # noqa: E402
 from jarvis.config import Settings, reset_config_caches  # noqa: E402
 from jarvis.computer.service import ComputerService, ComputerSettings  # noqa: E402
 from jarvis.core import JarvisCore  # noqa: E402
@@ -247,6 +248,10 @@ async def core(settings: Settings, stub: StubProvider) -> AsyncIterator[JarvisCo
         activity_bus=bus,
         embeddings=embeddings,
         computer=computer,
+        # Constructed, never launched. Nothing in the general fixture browses,
+        # and a Chromium process per test would be absurd; the browser tests
+        # build their own service with their own settings.
+        browser=BrowserService(BrowserSettings()),
         orchestrator=Orchestrator(
             registry=tools,
             router=router,
