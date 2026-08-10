@@ -101,6 +101,7 @@ class Orchestrator:
         memory_capture_mode: str = "ask",
         memory_min_importance: float = 0.45,
         memory_duplicate_threshold: float = 0.87,
+        computer: Any = None,
     ) -> None:
         self.registry = registry
         self.router = router
@@ -116,6 +117,7 @@ class Orchestrator:
         self.memory_capture_mode = memory_capture_mode
         self.memory_min_importance = memory_min_importance
         self.memory_duplicate_threshold = memory_duplicate_threshold
+        self.computer = computer
 
     # ── wiring ───────────────────────────────────────────────────────────────
 
@@ -157,6 +159,7 @@ class Orchestrator:
                     retry=self.retry,
                     max_iterations=self.max_iterations,
                     embeddings=self.embeddings,
+                    computer=self.computer,
                 ),
                 ValidateResultStage(),
                 PersistStage(),

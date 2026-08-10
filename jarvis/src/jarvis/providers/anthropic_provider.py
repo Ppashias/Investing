@@ -40,6 +40,7 @@ from jarvis.providers.base import (
     CompletionRequest,
     CompletionResult,
     ContentBlock,
+    ImageBlock,
     ModelInfo,
     ProviderCapability,
     StopReason,
@@ -163,6 +164,17 @@ class AnthropicProvider(AIProvider):
     def _block_to_api(block: ContentBlock) -> dict[str, Any]:
         if isinstance(block, TextBlock):
             return {"type": "text", "text": block.text}
+        if isinstance(block, ImageBlock):
+            # Anthropic models in MODELS all declare VISION; the guard is here
+            # so a future text-only entry cannot silently drop the image.
+            return {
+                "type": "image",
+                "source": {
+                    "type": "base64",
+                    "media_type": block.media_type,
+                    "data": block.data,
+                },
+            }
         if isinstance(block, ToolUseBlock):
             return {
                 "type": "tool_use",

@@ -188,6 +188,7 @@ class ExecuteStage(Stage):
         retry: RetryPolicy,
         max_iterations: int = 8,
         embeddings: Any = None,
+        computer: Any = None,
     ) -> None:
         self.registry = registry
         self._make_executor = executor_factory
@@ -195,6 +196,7 @@ class ExecuteStage(Stage):
         self.retry = retry
         self.max_iterations = max_iterations
         self.embeddings = embeddings
+        self.computer = computer
 
     async def run(self, ctx: PipelineContext) -> None:
         assert ctx.routing is not None
@@ -298,6 +300,7 @@ class ExecuteStage(Stage):
                 extras={
                     "embeddings": self.embeddings,
                     "project_id": ctx.project_id,
+                    "computer": self.computer,
                 },
             )
             try:

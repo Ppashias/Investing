@@ -39,21 +39,50 @@ def test_default_registry_has_expected_tools() -> None:
         # Phase 2
         "remember", "recall", "update_memory", "forget", "forget_project_memories",
         "search_knowledge",
+        # Phase 3
+        "observe_screen", "list_windows", "click", "scroll", "type_text",
+        "press_key", "open_application", "read_file", "write_file",
+        "list_directory", "run_command", "computer_status",
     }
 
 
-def test_no_tool_can_reach_outside_jarvis() -> None:
-    """Phases 1-2 ship nothing that can touch anything but JARVIS's own store.
+def test_no_tool_declares_a_sensitive_capability() -> None:
+    """Phase 3 adds EXECUTE tools; SENSITIVE_ACTION remains unreachable.
 
-    EXECUTE and EXTERNAL_ACTION arrive with the filesystem and browser in
-    Phases 3-5. Until then a tool declaring either would be a capability the
-    permission defaults have never been reasoned about for.
+    Phase 1-2's invariant was "nothing above WRITE", which computer control
+    legitimately breaks — clicking and running commands are EXECUTE by
+    definition. What must NOT appear is SENSITIVE_ACTION: financial,
+    communication and system-settings scopes are absent from Phase 3 by
+    design (§43), and a tool declaring that capability would be the first
+    crack in it.
     """
     for t in build_default_registry().all():
-        assert t.capability in (Capability.READ, Capability.WRITE), t.name
-        assert t.risk_level in (
-            RiskLevel.NONE, RiskLevel.LOW, RiskLevel.MEDIUM
-        ), f"{t.name} is {t.risk_level.value}"
+        assert t.capability is not Capability.SENSITIVE_ACTION, t.name
+        assert t.capability is not Capability.EXTERNAL_ACTION, (
+            f"{t.name} claims EXTERNAL_ACTION; network actions are Phase 4."
+        )
+
+
+def test_every_computer_tool_routes_through_the_executor() -> None:
+    """§13: no tool may reach the machine except through the chokepoint.
+
+    Checked structurally rather than by inspection — a future tool that calls
+    a backend directly would bypass the policy engine, the emergency stop and
+    the audit log all at once, and would look perfectly reasonable in review.
+    """
+    import inspect
+
+    from jarvis.tools.builtin import computer_tools
+
+    source = inspect.getsource(computer_tools)
+    # The module may reach the service, and the service alone.
+    assert "self.backend" not in source
+    assert ".backend." not in source, (
+        "a computer tool touches a backend directly instead of going through "
+        "ComputerService.execute_action"
+    )
+    for name in ("X11Backend", "xtest", "subprocess"):
+        assert name not in source, f"{name} must not be reachable from a tool"
 
 
 def test_irreversible_tools_can_never_be_auto_allowed() -> None:

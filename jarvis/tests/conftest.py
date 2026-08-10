@@ -27,6 +27,7 @@ os.environ["JARVIS_DATABASE_URL"] = "sqlite+aiosqlite:///:memory:"
 
 from jarvis.activity.service import ActivityBus  # noqa: E402
 from jarvis.config import Settings, reset_config_caches  # noqa: E402
+from jarvis.computer.service import ComputerService, ComputerSettings  # noqa: E402
 from jarvis.core import JarvisCore  # noqa: E402
 from jarvis.db.base import Database  # noqa: E402
 from jarvis.db.models import User  # noqa: E402
@@ -226,6 +227,17 @@ async def core(settings: Settings, stub: StubProvider) -> AsyncIterator[JarvisCo
     # exactly what the retrieval tests assert against.
     embeddings = LexicalEmbeddingProvider()
 
+    # A computer service with no display: the tests assert refusal behaviour
+    # and policy decisions, both of which are display-independent. The tests
+    # that need a real display create their own service and skip when there
+    # is none.
+    computer = ComputerService(
+        ComputerSettings(enabled=True, use_virtual_display=False),
+        router=router,
+        activity_bus=bus,
+    )
+    computer.start()
+
     instance = JarvisCore(
         settings=settings,
         database=database,
@@ -234,6 +246,7 @@ async def core(settings: Settings, stub: StubProvider) -> AsyncIterator[JarvisCo
         router=router,
         activity_bus=bus,
         embeddings=embeddings,
+        computer=computer,
         orchestrator=Orchestrator(
             registry=tools,
             router=router,
@@ -247,6 +260,7 @@ async def core(settings: Settings, stub: StubProvider) -> AsyncIterator[JarvisCo
             # responses the test queued for the main turn. The evaluator has
             # its own tests that switch it on explicitly.
             memory_capture_mode="off",
+            computer=computer,
         ),
     )
     await instance.startup(create_schema=True)

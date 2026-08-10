@@ -120,6 +120,35 @@ class Settings(BaseSettings):
     #: the boundary that keeps it from reading ``~/.ssh``.
     knowledge_roots: list[Path] = Field(default_factory=list)
 
+    # ── computer control (Phase 3) ───────────────────────────────────────────
+    #: Master switch. Off means the service still reports *why* nothing works,
+    #: rather than the endpoints disappearing.
+    computer_enabled: bool = True
+    #: Display to drive. Unset uses ``DISPLAY`` from the environment.
+    computer_display: str | None = None
+    #: Create an Xvfb display when none exists. Opt-in: it means JARVIS can
+    #: launch and drive GUI applications on a headless machine, which is a
+    #: capability the operator should choose deliberately.
+    computer_virtual_display: bool = False
+    computer_virtual_width: int = 1280
+    computer_virtual_height: int = 800
+
+    #: Directories JARVIS may read, and — separately — write and delete in.
+    #: Empty means no filesystem access at all.
+    computer_file_roots: list[Path] = Field(default_factory=list)
+    computer_write_files: bool = False
+    computer_delete_files: bool = False
+    #: Working directory for commands. Defaults to the first file root.
+    computer_working_directory: Path | None = None
+
+    #: How long a screenshot stays in memory. Never written to disk unless
+    #: retention is switched on (§6).
+    computer_screenshot_ttl_seconds: int = 300
+    computer_screenshot_retain: bool = False
+
+    computer_max_steps: int = 25
+    computer_task_timeout_seconds: float = 300.0
+
     # ── API auth ─────────────────────────────────────────────────────────────
     #: When set, every non-health request must present this token. JARVIS binds
     #: to loopback, but loopback is shared with every other process on the
@@ -172,9 +201,17 @@ class Settings(BaseSettings):
                 "max_injected": self.knowledge_max_injected,
                 "roots_configured": len(self.knowledge_roots),
             },
+            "computer": {
+                "enabled": self.computer_enabled,
+                "virtual_display": self.computer_virtual_display,
+                "file_roots_configured": len(self.computer_file_roots),
+                "write_files": self.computer_write_files,
+                "delete_files": self.computer_delete_files,
+                "screenshot_retention": self.computer_screenshot_retain,
+            },
         }
 
-    @field_validator("knowledge_roots", mode="after")
+    @field_validator("knowledge_roots", "computer_file_roots", mode="after")
     @classmethod
     def _resolve_roots(cls, v: list[Path]) -> list[Path]:
         """Resolved once, here, so path containment checks downstream compare

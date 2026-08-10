@@ -16,6 +16,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from jarvis.activity.service import ActivityBus
 from jarvis.config import Settings, get_settings
+from jarvis.computer.service import ComputerService, ComputerSettings
 from jarvis.context.manager import ContextBudget
 from jarvis.db.base import Database
 from jarvis.db.models import User
@@ -43,6 +44,7 @@ class JarvisCore:
     activity_bus: ActivityBus
     orchestrator: Orchestrator
     embeddings: EmbeddingProvider
+    computer: ComputerService
 
     # ── lifecycle ────────────────────────────────────────────────────────────
 
@@ -57,6 +59,27 @@ class JarvisCore:
         router = ModelRouter(providers, settings)
         bus = ActivityBus()
         embeddings = build_embedding_provider(settings)
+
+        computer = ComputerService(
+            ComputerSettings(
+                enabled=settings.computer_enabled,
+                display=settings.computer_display,
+                use_virtual_display=settings.computer_virtual_display,
+                virtual_width=settings.computer_virtual_width,
+                virtual_height=settings.computer_virtual_height,
+                file_roots=list(settings.computer_file_roots),
+                can_write_files=settings.computer_write_files,
+                can_delete_files=settings.computer_delete_files,
+                working_directory=settings.computer_working_directory,
+                screenshot_ttl_seconds=settings.computer_screenshot_ttl_seconds,
+                screenshot_retain=settings.computer_screenshot_retain,
+                screenshot_dir=settings.data_dir / "screenshots",
+                max_steps=settings.computer_max_steps,
+                task_timeout_seconds=settings.computer_task_timeout_seconds,
+            ),
+            router=router,
+            activity_bus=bus,
+        )
 
         budget = ContextBudget(
             max_memories=settings.memory_max_injected,
@@ -80,6 +103,7 @@ class JarvisCore:
             memory_capture_mode=settings.memory_capture_mode,
             memory_min_importance=settings.memory_autostore_min_importance,
             memory_duplicate_threshold=settings.memory_duplicate_threshold,
+            computer=computer,
         )
 
         return cls(
@@ -91,6 +115,7 @@ class JarvisCore:
             activity_bus=bus,
             orchestrator=orchestrator,
             embeddings=embeddings,
+            computer=computer,
         )
 
     async def startup(self, *, create_schema: bool = False) -> None:
@@ -102,6 +127,11 @@ class JarvisCore:
         """
         if create_schema:
             await self.database.create_all()
+
+        # Probed before the first request so /api/computer/status can answer
+        # "why can't JARVIS see my screen?" immediately rather than after a
+        # failed action.
+        self.computer.start()
 
         async with self.database.session_factory() as session:
             await self.tools.sync_to_db(session)
@@ -118,6 +148,7 @@ class JarvisCore:
         )
 
     async def shutdown(self) -> None:
+        self.computer.shutdown()
         await self.providers.aclose()
         await self.database.dispose()
         log.info("jarvis_stopped")
@@ -155,6 +186,13 @@ class JarvisCore:
                 "names": [t.name for t in self.tools.all()],
             },
             "activity_subscribers": self.activity_bus.subscriber_count,
+            "computer": {
+                "enabled": self.computer.settings.enabled,
+                "backend": self.computer.backend.key,
+                "display": self.computer.capabilities.display,
+                "display_kind": self.computer.capabilities.display_kind,
+                "emergency_stop": self.computer.emergency_stop.engaged,
+            },
             "embeddings": {
                 "provider": self.embeddings.info.key,
                 "model": self.embeddings.info.model,

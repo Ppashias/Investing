@@ -60,7 +60,26 @@ class ToolResultBlock:
     type: Literal["tool_result"] = "tool_result"
 
 
-ContentBlock = TextBlock | ToolUseBlock | ToolResultBlock
+@dataclass(slots=True)
+class ImageBlock:
+    """A base64 image. Added in Phase 3 for screen observation.
+
+    Carried as base64 rather than raw bytes because every provider that
+    accepts images accepts base64, and keeping the encoding at the boundary
+    means the screenshot is encoded once rather than per provider attempt.
+
+    A provider that does not declare ``ProviderCapability.VISION`` must reject
+    this block rather than dropping it: silently discarding the image would
+    leave the model reasoning about a screen it cannot see, and confidently
+    inventing what is on it.
+    """
+
+    data: str
+    media_type: Literal["image/png", "image/jpeg", "image/webp", "image/gif"] = "image/png"
+    type: Literal["image"] = "image"
+
+
+ContentBlock = TextBlock | ToolUseBlock | ToolResultBlock | ImageBlock
 
 
 @dataclass(slots=True)

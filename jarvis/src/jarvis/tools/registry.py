@@ -159,10 +159,16 @@ def build_default_registry() -> ToolRegistry:
     permission engine floors it to ASK. Filesystem, browser, shell, and screen
     tools arrive in Phases 3-5 behind the same interface.
     """
-    from jarvis.tools.builtin import memory_tools, system_tools, task_tools
+    from jarvis.tools.builtin import (
+        computer_tools,
+        memory_tools,
+        system_tools,
+        task_tools,
+    )
 
     registry = ToolRegistry()
     registry.register_all(system_tools.TOOLS)
     registry.register_all(task_tools.TOOLS)
     registry.register_all(memory_tools.TOOLS)
+    registry.register_all(computer_tools.TOOLS)
     return registry

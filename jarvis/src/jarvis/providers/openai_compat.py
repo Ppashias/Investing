@@ -40,6 +40,7 @@ from jarvis.providers.base import (
     CompletionRequest,
     CompletionResult,
     ContentBlock,
+    ImageBlock,
     ModelInfo,
     ProviderCapability,
     StopReason,
@@ -145,6 +146,7 @@ class OpenAICompatProvider(AIProvider):
 
         for msg in messages:
             text_parts: list[str] = []
+            image_parts: list[dict[str, Any]] = []
             tool_calls: list[dict[str, Any]] = []
             # Tool results are separate top-level messages in this format, not
             # blocks inside a user turn — so they are emitted before the turn
@@ -154,6 +156,22 @@ class OpenAICompatProvider(AIProvider):
             for block in msg.content:
                 if isinstance(block, TextBlock):
                     text_parts.append(block.text)
+                elif isinstance(block, ImageBlock):
+                    if ProviderCapability.VISION not in self._capabilities:
+                        # Refused, not dropped. A model reasoning about a
+                        # screen it cannot see will confidently invent one.
+                        raise ProviderError(
+                            f"{self.key} does not declare VISION, so it cannot "
+                            "accept a screenshot."
+                        )
+                    image_parts.append(
+                        {
+                            "type": "image_url",
+                            "image_url": {
+                                "url": f"data:{block.media_type};base64,{block.data}"
+                            },
+                        }
+                    )
                 elif isinstance(block, ToolUseBlock):
                     tool_calls.append(
                         {
@@ -175,9 +193,20 @@ class OpenAICompatProvider(AIProvider):
                     )
 
             out.extend(tool_results)
-            if text_parts or tool_calls:
+            if text_parts or tool_calls or image_parts:
                 entry: dict[str, Any] = {"role": msg.role}
-                entry["content"] = "".join(text_parts) if text_parts else None
+                if image_parts:
+                    # The multimodal form: a list of parts rather than a
+                    # string. Only used when there is an image, because some
+                    # OpenAI-compatible servers reject the list form for
+                    # plain text.
+                    parts: list[dict[str, Any]] = []
+                    if text_parts:
+                        parts.append({"type": "text", "text": "".join(text_parts)})
+                    parts.extend(image_parts)
+                    entry["content"] = parts
+                else:
+                    entry["content"] = "".join(text_parts) if text_parts else None
                 if tool_calls:
                     entry["tool_calls"] = tool_calls
                 out.append(entry)
