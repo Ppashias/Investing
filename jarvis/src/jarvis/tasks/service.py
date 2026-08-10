@@ -349,7 +349,15 @@ class TaskService:
         )
         self.session.add(execution)
 
-        if task.status in (TaskStatus.TODO, TaskStatus.WAITING):
+        # A retry after a failure has to move the task back to IN_PROGRESS —
+        # otherwise it stays FAILED, and FAILED cannot legally reach COMPLETED,
+        # so a successful second attempt would never be reflected on the task.
+        if task.status in (
+            TaskStatus.TODO,
+            TaskStatus.WAITING,
+            TaskStatus.BLOCKED,
+            TaskStatus.FAILED,
+        ):
             await self._transition(task, TaskStatus.IN_PROGRESS, agent or "system", None)
 
         await self.session.flush()

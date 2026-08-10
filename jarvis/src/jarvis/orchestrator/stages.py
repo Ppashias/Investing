@@ -198,7 +198,10 @@ class ExecuteStage(Stage):
         assert ctx.routing is not None
         provider = ctx.routing.provider
         system_text = ctx.system_prompt.render() if ctx.system_prompt else None
-        tool_specs = self.registry.provider_specs(ctx.available_tools or None)
+        # Pass the list as-is. `x or None` would turn an intentionally empty
+        # tool set into None, which the registry reads as "every enabled tool"
+        # — the opposite of what the plan asked for.
+        tool_specs = self.registry.provider_specs(ctx.available_tools)
 
         messages = [*ctx.provider_messages, ChatMessage.user_text(ctx.message)]
         executor: ToolExecutor = self._make_executor(ctx.session)

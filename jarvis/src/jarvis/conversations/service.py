@@ -183,11 +183,33 @@ class ConversationService:
         the prompt builder on every turn, so replaying a stored one would
         double it and pin the conversation to a stale instruction set.
 
-        Tool results are attached to the *user* turn that follows the assistant
-        turn requesting them, which is the shape every provider expects.
+        Tool results become a ``user`` turn placed immediately after the
+        assistant turn that requested them — that is the shape every provider
+        expects, and an unanswered ``tool_use`` is rejected outright.
+
+        The results are flushed before *any* following turn, not just before
+        the next user message. The common transcript is
+        ``user → assistant(tool_use) → tool → assistant(answer)``, where the
+        next turn is an assistant one; deferring to the next user message would
+        push the result past the answer and break the pairing.
         """
         out: list[ChatMessage] = []
         pending_results: list[ContentBlock] = []
+
+        def flush(into_user_blocks: list[ContentBlock] | None = None
+                  ) -> list[ContentBlock] | None:
+            """Emit buffered tool results. Merges into a user turn when the
+            next turn is itself a user turn, rather than emitting two in a row."""
+            nonlocal pending_results
+            if not pending_results:
+                return into_user_blocks
+            if into_user_blocks is not None:
+                merged = [*pending_results, *into_user_blocks]
+                pending_results = []
+                return merged
+            out.append(ChatMessage(role="user", content=list(pending_results)))
+            pending_results = []
+            return None
 
         for message in messages:
             if message.role is MessageRole.SYSTEM:
@@ -205,18 +227,13 @@ class ConversationService:
                 continue
 
             if message.role is MessageRole.USER:
-                if pending_results:
-                    blocks = [*pending_results, *blocks]
-                    pending_results = []
+                blocks = flush(blocks) or blocks
                 out.append(ChatMessage(role="user", content=blocks))
             else:
+                flush()
                 out.append(ChatMessage(role="assistant", content=blocks))
 
-        # Tool results with no following user turn still have to be delivered,
-        # or the provider sees an unanswered tool_use and rejects the request.
-        if pending_results:
-            out.append(ChatMessage(role="user", content=pending_results))
-
+        flush()
         return out
 
     @staticmethod
