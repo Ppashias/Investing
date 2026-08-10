@@ -107,6 +107,60 @@
       <ul id="documentList" class="doc-list"></ul>
       <div class="rail-head"><span class="dim">Knowledge sources</span></div>
       <ul id="sourceList" class="source-list"></ul>
+
+      <!-- ── Obsidian ────────────────────────────────────────────────────
+           Every field here is filled from /api/obsidian/status, which walks
+           the vault directory on each request. Nothing is remembered from a
+           previous success, so a vault that has gone away reads ERROR. -->
+      <div class="comp-block obsidian-block">
+        <div class="rail-head">
+          <h4>Obsidian</h4>
+          <span id="obsState" class="src-state off">DISCONNECTED</span>
+        </div>
+
+        <div id="obsFacts" class="system-info"></div>
+
+        <p id="obsDetail" class="comp-hint"></p>
+
+        <div id="obsCapabilities" class="obs-caps"></div>
+
+        <div id="obsConnectForm" class="obs-form">
+          <label class="obs-label" for="obsVaultPath">Vault folder</label>
+          <input id="obsVaultPath" type="text" class="obs-input"
+                 placeholder="/home/you/Documents/MyVault" autocomplete="off">
+          <p class="comp-hint">
+            A vault is the folder your notes live in. JARVIS reads the files
+            directly, so Obsidian does not need to be running — or installed.
+          </p>
+          <label class="obs-check">
+            <input type="checkbox" id="obsAllowWrites"> Allow JARVIS to write notes
+          </label>
+          <label class="obs-check">
+            <input type="checkbox" id="obsAllowDeletes"> Allow JARVIS to delete notes
+          </label>
+        </div>
+
+        <div class="obs-actions">
+          <button id="obsConnect" class="ghost small">Connect</button>
+          <button id="obsTest" class="ghost small">Test connection</button>
+          <button id="obsSync" class="ghost small">Sync</button>
+          <button id="obsDisconnect" class="ghost small">Disconnect</button>
+        </div>
+
+        <p id="obsNotice" class="rail-notice" hidden></p>
+
+        <div id="obsConflicts" class="obs-conflicts" hidden>
+          <h4>Conflicts</h4>
+          <p class="comp-hint">
+            These notes changed in Obsidian and in JARVIS since the last sync.
+            Nothing is overwritten until you choose.
+          </p>
+          <ul id="obsConflictList" class="obs-conflict-list"></ul>
+        </div>
+
+        <div class="rail-head"><span class="dim">Vault activity</span></div>
+        <ul id="obsAudit" class="audit-list"></ul>
+      </div>
     </div>
 
     <div class="tabpanel" data-panel="computer" hidden>

@@ -284,11 +284,15 @@ def test_ingest_from_path_refused_without_roots(client: TestClient) -> None:
     assert response.status_code == 422
 
 
-def test_sources_list_obsidian_as_planned(client: TestClient) -> None:
+def test_sources_list_obsidian_as_implemented_but_unconnected(
+    client: TestClient,
+) -> None:
+    """Phase 2.5 flipped ``implemented``; ``connected`` still has to be earned
+    by a reachable vault, and no vault is configured in a test."""
     body = client.get("/api/knowledge/sources").json()
     sources = {s["key"]: s for s in body["sources"]}
-    assert sources["obsidian"]["implemented"] is False
-    assert sources["obsidian"]["available"] is False
+    assert sources["obsidian"]["implemented"] is True
+    assert sources["obsidian"]["connected"] is False
     assert sources["internal"]["implemented"] is True
     assert body["semantic_search"] is False
 

@@ -1,9 +1,9 @@
 # JARVIS — Core (Phases 1–3)
 
 A personal AI operating system. Conversation, tasks, tools, permissions,
-confirmation, observability, persistent memory, an ingested knowledge base,
-and — as of Phase 3 — the ability to observe and operate the computer, all
-behind a provider-independent AI layer.
+confirmation, observability, persistent memory, an ingested knowledge base
+with a real Obsidian connector, and — as of Phase 3 — the ability to observe
+and operate the computer, all behind a provider-independent AI layer.
 
 Computer control is real and it is deliberately narrow. Nothing about the
 machine is reachable by default: a fresh install can see the screen and list
@@ -12,9 +12,8 @@ applications are thirteen separate scopes, each off until switched on, each
 still subject to a mode ceiling and a risk classifier that reads what the
 action would actually do. There is no `ALLOW_COMPUTER = TRUE`.
 
-**Browser automation and specialised agents are not built**, and neither is
-the Obsidian connector: the architecture is ready for one and no vault is
-reachable. The system says so plainly rather than pretending otherwise — see
+**Browser automation and specialised agents are not built.** The system says so
+plainly rather than pretending otherwise — see
 [Not implemented](#not-implemented).
 
 ---
@@ -214,6 +213,17 @@ except `/api/health`.
 | `POST` | `/knowledge/ingest/upload` | Ingest an uploaded file. |
 | `POST` | `/knowledge/ingest/path` | Ingest from an allow-listed directory. |
 | `GET` | `/knowledge/sources` | Providers, formats, roots. |
+| `GET` | `/obsidian/discover` | Vaults found on this machine. Never guesses. |
+| `GET` | `/obsidian/status` | Connection state, walked live. |
+| `POST` | `/obsidian/connect` · `/test` · `/disconnect` | Connection lifecycle. |
+| `GET` | `/obsidian/notes` · `/folders` · `/note` | List and read. |
+| `GET` | `/obsidian/search` · `/links` | Search; links and backlinks. |
+| `POST` | `/obsidian/notes` | Create a note. Asks first. |
+| `PATCH` | `/obsidian/note` | Append, section-replace, or overwrite. |
+| `DELETE` | `/obsidian/note` | Delete. Always confirmed. |
+| `GET` | `/obsidian/sync/plan` · `POST` `/obsidian/sync` | Dry run, then pull. |
+| `GET` | `/obsidian/conflicts` · `POST` `/conflicts/resolve` | Both versions, your choice. |
+| `GET` | `/obsidian/audit` | What JARVIS did to the vault. Read-only. |
 | `GET` | `/computer/status` | Display, backend, mode, scopes, stop state. |
 | `GET` | `/computer/capabilities` | Per action: available, and if not, why. |
 | `POST` | `/computer/stop` | Emergency stop. Sets the latch first, audits after. |
@@ -383,26 +393,50 @@ prompt at worst.
 
 ### Obsidian
 
-**Not implemented.** `/api/knowledge/sources` reports it as `implemented: false`
-and the UI shows it as *planned*.
+Implemented as of Phase 2.5, behind the same `KnowledgeProvider` interface as
+everything else. Point JARVIS at the folder your notes live in — in the
+Obsidian panel, or with `JARVIS_OBSIDIAN_VAULT_PATH`.
 
-What exists is the architecture: `SourceRef`/`ObsidianRef` can already represent
-a vault id, note path, title, frontmatter, tags, links, backlinks, content hash
-and sync status; all thirteen operations in the Phase 2.5 brief map onto the
-existing `KnowledgeProvider` interface without extending it; and a test walks
-that mapping so the interface cannot drift away from the contract. See
-`knowledge/providers/obsidian_contract.py`, which is documentation and constants
-with deliberately no implementation.
+**JARVIS reads the vault files directly.** Obsidian does not need to be
+running, or installed. There is no plugin, no API key, and no local port. That
+choice is argued in full in `docs/jarvis/04-phase2.5-obsidian.md`; the short
+version is that a vault *is* a folder of Markdown, the alternatives all require
+a credential and a running application, and only the filesystem satisfies "keep
+working when Obsidian is unavailable".
+
+**Reading is on; writing is not.** `allow_writes` and `allow_deletes` are
+separate switches, both off by default. With writes on, creating and appending
+ask for approval; a full overwrite and a delete are irreversible, so the
+permission engine's floor means no grant can ever make them automatic.
+
+**Sync is incremental and one-way by default.** Modification time, then content
+hash, then ingestion — the second sync of an unchanged vault does nothing.
+`GET /api/obsidian/sync/plan` shows what a sync would do without doing it.
+Writing back is always an explicit, audited, permission-checked operation.
+
+**A note that changed on both sides is a conflict**, not a silent overwrite:
+JARVIS offers keep-Obsidian, keep-JARVIS, merge, or cancel. Merge keeps both
+versions in the note under a heading rather than inventing a third.
+
+**Provenance is real.** A retrieved fragment answers "where did you get that?"
+with `Obsidian → Projects/JARVIS Architecture.md`, carrying the vault name,
+note path, frontmatter, tags, links and content hash.
+
+**Notes are knowledge, not memory.** Syncing a vault produces documents, never
+personal memories. "Remember that I prefer X" is memory; "write up why we chose
+X" is a note. No Obsidian tool writes to memory and no memory tool writes to
+the vault.
 
 ---
 
 ## Tools
 
-Twenty-three. The first eleven cannot touch anything outside JARVIS's own
-store. The twelve added in Phase 3 can touch the machine, and every one of
-them goes through `ComputerService.execute_action` — there is no second path,
-which is what makes "no tool bypasses the permission system" a checkable claim
-rather than an intention.
+Twenty-nine, in three groups with genuinely different reach. The first eleven
+cannot touch anything outside JARVIS's own store. The six Obsidian tools write
+to the user's notes. The twelve computer tools operate the machine. Each group
+that leaves JARVIS routes through one chokepoint — `ObsidianService.guard` and
+`ComputerService.execute_action` — which is what makes "no tool bypasses the
+permission system" a checkable claim rather than an intention.
 
 | Tool | Capability | Risk | What it does |
 |---|---|---|---|
@@ -417,6 +451,12 @@ rather than an intention.
 | `forget` | WRITE | LOW | Archive one memory (reversible). |
 | `forget_project_memories` | WRITE | MEDIUM | Bulk archive. Always asks. |
 | `search_knowledge` | READ | NONE | Search ingested documents. |
+| `obsidian_status` | READ | NONE | Vault, connection, what is permitted. |
+| `search_obsidian` | READ | NONE | Search the vault by title, content, tag, folder. |
+| `read_obsidian_note` | READ | NONE | Read one note, Markdown preserved. |
+| `list_obsidian_notes` | READ | NONE | List notes, optionally under a folder. |
+| `create_obsidian_note` | WRITE | LOW | Write a new note. Asks first. |
+| `update_obsidian_note` | WRITE | MEDIUM | Append, replace a section, or overwrite. |
 | `computer_status` | READ | NONE | Display, mode, scopes, stop state. |
 | `list_windows` | READ | NONE | Open windows and which is focused. |
 | `observe_screen` | READ | LOW | Structured state, image only if needed. |
@@ -472,7 +512,7 @@ automatically — there is no way to opt out.
 ## Development
 
 ```bash
-./.venv/bin/python -m pytest            # 434 tests
+./.venv/bin/python -m pytest            # 555 tests
 ./.venv/bin/alembic revision --autogenerate -m "what changed"
 ./.venv/bin/alembic upgrade head
 ```
@@ -502,7 +542,14 @@ Absent from the UI rather than stubbed:
 - **Ambient memory capture without a model provider.** Explicit memory commands
   work without one; automatic extraction needs a model and reports that it is
   unavailable rather than silently doing nothing.
-- **Two-way sync of any kind.** Nothing writes back to any external source.
+- **Unrestricted two-way sync.** Pull is the only automatic direction. Writing
+  to a vault is always explicit, permission-checked and audited — automatic
+  bidirectional sync is how people lose hand-written notes.
+- **The Obsidian Local REST API transport.** Evaluated and rejected: it needs
+  the app running, a plugin installed, and a stored token, for capabilities the
+  filesystem already has. The transport seam is in place if that changes.
+- **Multi-vault.** One vault at a time. The schema is ready for more; the UI
+  and the sync bookkeeping are not, and claiming otherwise would be untested.
 - **Accessibility-tree reading.** Observation is windows plus pixels. No
   AT-SPI bus is available here, so JARVIS cannot enumerate a button by name —
   it locates targets visually, and says so rather than implying otherwise.
@@ -533,3 +580,6 @@ Absent from the UI rather than stubbed:
 - `docs/jarvis/03-phase3-security-review.md` — Phase 3 security review: three
   defects found and fixed, and an honest account of what command
   classification does and does not buy
+- `docs/jarvis/04-phase2.5-obsidian.md` — the Obsidian integration: why the
+  filesystem transport was chosen over the REST API, how permissions and taint
+  apply to a vault, and the two defects the real vault found

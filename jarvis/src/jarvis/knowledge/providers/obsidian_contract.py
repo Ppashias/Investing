@@ -1,16 +1,16 @@
-"""The Obsidian contract — specification only. **Nothing here is implemented.**
+"""The Obsidian contract — the specification the connector satisfies.
 
-§4 asks for the interface to be defined now and §43 forbids implementing the
-connector. This module is the seam between those two instructions: it maps the
-thirteen operations §4 lists onto :class:`~jarvis.knowledge.base.KnowledgeProvider`,
-records the decisions Phase 2.5 will otherwise have to make under pressure, and
-deliberately provides no working code.
+Written in Phase 2 as documentation with no implementation, and kept in Phase
+2.5 as the specification :mod:`jarvis.knowledge.providers.obsidian` is checked
+against. The tables below are still the source of truth; what changed is that
+a test now walks :data:`OPERATION_MAP` against the real provider as well as
+against the interface, so a connector that quietly drops an operation fails
+rather than passes.
 
-Importing this module registers nothing. ``KnowledgeService.providers()`` will
-not list Obsidian, ``/api/knowledge/sources`` will not show it as available,
-and no ``SourceKind.OBSIDIAN`` row can be produced by anything in Phase 2. A
-test asserts all three, because "architecturally ready" degrades into "quietly
-half-built" precisely when nobody checks.
+Importing this module still registers nothing. It has no provider, no
+transport and no vault — those live in the ``obsidian`` package, and the
+separation is what lets this file stay a contract rather than becoming a
+second implementation.
 
 ## §4's operations, mapped
 
@@ -74,39 +74,25 @@ direct vault read, an MCP server, or a future plugin API, so the choice belongs
 to Phase 2.5. What this module fixes is that the *rest of JARVIS* cannot tell
 which was chosen.
 
-## Sketch
+## How Phase 2.5 answered the open questions
 
-The signatures below are what an implementation would satisfy. They are in a
-docstring rather than a class body so that this file defines no importable
-provider and no accidental base class.
+**Transport: the vault filesystem.** Chosen against the alternatives in
+:mod:`jarvis.knowledge.providers.obsidian.vault`, whose module docstring
+carries the comparison. The short version is that it needs no credential, no
+running application and no plugin, and it is the only option that satisfies
+"JARVIS keeps working when Obsidian is unavailable" — because it never needed
+Obsidian to be available.
 
-    class ObsidianProvider(KnowledgeProvider):
-        key = "obsidian"
-        kind = SourceKind.OBSIDIAN
-        name = "Obsidian vault"
+**Identity: still ``note_path``.** The move-detection mitigation described
+above is implemented as ``base_hash`` in the document's metadata.
 
-        # Reads the vault directly, over MCP, or through a plugin API — the
-        # transport is chosen here and nowhere else.
-        def __init__(self, transport: ObsidianTransport) -> None: ...
+**Two writers: pull is the only automatic direction.** Writing back is an
+explicit, permission-checked, audited operation, and a note that changed on
+both sides is a conflict the user resolves.
 
-        @property
-        def capabilities(self) -> frozenset[KnowledgeCapability]:
-            # Exactly what the transport can do. A read-only mount must not
-            # claim CREATE.
-            ...
-
-        async def status(self) -> ProviderStatus: ...
-        async def search(self, query, *, limit=20, **filters): ...
-        async def read(self, item_id) -> KnowledgeItem: ...
-        async def list_items(self, *, prefix=None, limit=200): ...
-        async def create(self, *, title, content, path=None, **metadata): ...
-        async def update(self, item_id, *, content, **metadata): ...
-        async def delete(self, item_id) -> None: ...
-        async def move(self, item_id, new_path) -> KnowledgeItem: ...
-        async def metadata(self, item_id) -> dict: ...
-        async def links(self, item_id) -> dict[str, list[str]]: ...
-        async def sync(self, *, direction="pull") -> dict: ...
-        async def iter_ingestable(self, *, limit=1000): ...
+**Frontmatter is the join key.** ``jarvis-project:`` associates a note with a
+project and ``jarvis-created:`` marks a note JARVIS authored. Both are written
+and read by the connector.
 """
 
 from __future__ import annotations
@@ -152,8 +138,15 @@ OPERATION_MAP: dict[str, str] = {
     "create_link": "update",
 }
 
-IMPLEMENTED = False
-"""Read by the API so the UI can show Obsidian as *planned*, never *available*.
+IMPLEMENTED = True
+"""True as of Phase 2.5: :mod:`jarvis.knowledge.providers.obsidian` implements
+every operation in :data:`OPERATION_MAP` against a real vault.
 
-A constant rather than an absence, because "not in the provider list" is
-ambiguous — it could mean unconfigured — while an explicit false is not."""
+This flag says the *connector exists*, not that a vault is connected — those
+are different facts and collapsing them is what made the previous status
+report useless. Whether a vault is reachable is answered by
+``/api/obsidian/status``, which walks the actual directory; this constant is
+answered by the code being present.
+
+A test asserts the two agree: if this is true, importing the provider must
+succeed and every mapped method must exist on it."""

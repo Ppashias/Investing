@@ -163,11 +163,13 @@ class KnowledgeService:
     async def provider_status(self) -> list[dict[str, object]]:
         """What ``/api/knowledge/sources`` returns.
 
-        Registered providers report real state. Planned ones are listed
-        separately as ``available: false`` with ``implemented: false`` — §30
-        asks for the architecture to accommodate an Obsidian panel, and the
-        honest rendering of "not built" is an explicit flag rather than
-        omission, which would be indistinguishable from "not configured".
+        Registered providers report real state, walked live. A source that is
+        implemented but not configured is still listed, because omission is
+        indistinguishable from "not built" — and after Phase 2.5 those are
+        genuinely different facts about Obsidian: the connector exists
+        (``implemented``) and may or may not have a vault behind it
+        (``connected``). Collapsing them is what made the previous report
+        useless.
         """
         rows: list[dict[str, object]] = []
         for provider in self._providers.values():
@@ -177,26 +179,28 @@ class KnowledgeService:
             payload["implemented"] = True
             rows.append(payload)
 
-        rows.append(
-            {
-                "key": "obsidian",
-                "kind": SourceKind.OBSIDIAN.value,
-                "name": "Obsidian vault",
-                "connected": False,
-                "available": False,
-                "implemented": obsidian_contract.IMPLEMENTED,
-                "capabilities": sorted(
-                    c.value for c in obsidian_contract.EXPECTED_OBSIDIAN_CAPABILITIES
-                ),
-                "detail": (
-                    "Planned for Phase 2.5. The data model and provider "
-                    "interface support it; no connector exists."
-                ),
-                "document_count": 0,
-                "last_synced_at": None,
-                "last_error": None,
-            }
-        )
+        if not any(row["kind"] == SourceKind.OBSIDIAN.value for row in rows):
+            rows.append(
+                {
+                    "key": "obsidian",
+                    "kind": SourceKind.OBSIDIAN.value,
+                    "name": "Obsidian vault",
+                    "connected": False,
+                    "available": obsidian_contract.IMPLEMENTED,
+                    "implemented": obsidian_contract.IMPLEMENTED,
+                    "capabilities": sorted(
+                        c.value
+                        for c in obsidian_contract.EXPECTED_OBSIDIAN_CAPABILITIES
+                    ),
+                    "detail": (
+                        "The connector is implemented; no vault is connected. "
+                        "Point JARVIS at a vault folder in the Obsidian panel."
+                    ),
+                    "document_count": 0,
+                    "last_synced_at": None,
+                    "last_error": None,
+                }
+            )
         return rows
 
     # ── retrieval ────────────────────────────────────────────────────────────

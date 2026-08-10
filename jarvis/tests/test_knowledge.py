@@ -442,10 +442,14 @@ async def test_provider_status_reports_real_state(session, user, vault) -> None:
 # ── Obsidian readiness (§38, §40, §43) ───────────────────────────────────────
 
 
-def test_obsidian_connector_does_not_exist() -> None:
-    """§43 — the connector must not be implemented, and must say so."""
-    assert obsidian_contract.IMPLEMENTED is False
-    # No importable provider class hiding in the contract module.
+def test_the_contract_module_stays_a_contract() -> None:
+    """Phase 2.5 implemented the connector — in its own package.
+
+    This module must remain specification: no provider class, no transport, no
+    working code. The separation is what lets the contract be checked against
+    the implementation rather than *being* the implementation.
+    """
+    assert obsidian_contract.IMPLEMENTED is True
     classes = [
         name for name in dir(obsidian_contract)
         if isinstance(getattr(obsidian_contract, name), type)
@@ -453,7 +457,13 @@ def test_obsidian_connector_does_not_exist() -> None:
     assert not any("Provider" in name for name in classes)
 
 
-async def test_obsidian_is_never_registered(session, user, vault) -> None:
+async def test_obsidian_reports_implemented_but_unconnected(session, user, vault) -> None:
+    """Two different facts, and the report keeps them apart.
+
+    ``implemented`` is about the code existing; ``connected`` is about a vault
+    being reachable. Collapsing them is what made the Phase 2 report useless —
+    it could not distinguish "not built" from "not configured".
+    """
     service = KnowledgeService(
         session,
         providers=[InternalKnowledgeProvider(session, user.id), LocalFileProvider([vault])],
@@ -461,9 +471,7 @@ async def test_obsidian_is_never_registered(session, user, vault) -> None:
     assert "obsidian" not in {p.key for p in service.providers()}
 
     rows = {r["key"]: r for r in await service.provider_status()}
-    # Listed as planned, so the UI can render it honestly — but not available.
-    assert rows["obsidian"]["available"] is False
-    assert rows["obsidian"]["implemented"] is False
+    assert rows["obsidian"]["implemented"] is True
     assert rows["obsidian"]["connected"] is False
 
 
@@ -561,11 +569,13 @@ async def test_a_document_can_carry_obsidian_provenance(pipeline, user) -> None:
     assert stored.obsidian.note_path == "Notes/Idea.md"
 
 
-def test_nothing_in_phase_2_produces_an_obsidian_source() -> None:
-    """The enum member exists; no code path populates it.
+def test_only_the_connector_produces_an_obsidian_source() -> None:
+    """``SourceKind.OBSIDIAN`` may only be set by the Obsidian code.
 
-    Scanned rather than asserted from memory, so adding a stray producer trips
-    the test.
+    In Phase 2 this asserted that *nothing* produced it. Now that a connector
+    exists the useful property is narrower and still worth enforcing: a
+    document claiming to come from a vault must have come through the vault
+    package, not from some other code path that decided to label itself.
     """
     import subprocess
 
@@ -575,7 +585,9 @@ def test_nothing_in_phase_2_produces_an_obsidian_source() -> None:
         capture_output=True, text=True,
     ).stdout.strip().splitlines()
 
-    allowed = ("knowledge/types.py", "knowledge/service.py",
-               "providers/obsidian_contract.py")
+    allowed = (
+        "knowledge/types.py", "knowledge/service.py",
+        "providers/obsidian_contract.py", "providers/obsidian/",
+    )
     for line in hits:
         assert any(a in line for a in allowed), f"unexpected producer: {line}"

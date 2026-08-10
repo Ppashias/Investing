@@ -59,6 +59,22 @@
     sourceList: $("sourceList"),
     uploadDoc: $("uploadDoc"),
     docFile: $("docFile"),
+    obsState: $("obsState"),
+    obsFacts: $("obsFacts"),
+    obsDetail: $("obsDetail"),
+    obsCapabilities: $("obsCapabilities"),
+    obsConnectForm: $("obsConnectForm"),
+    obsVaultPath: $("obsVaultPath"),
+    obsAllowWrites: $("obsAllowWrites"),
+    obsAllowDeletes: $("obsAllowDeletes"),
+    obsConnect: $("obsConnect"),
+    obsTest: $("obsTest"),
+    obsSync: $("obsSync"),
+    obsDisconnect: $("obsDisconnect"),
+    obsNotice: $("obsNotice"),
+    obsConflicts: $("obsConflicts"),
+    obsConflictList: $("obsConflictList"),
+    obsAudit: $("obsAudit"),
     computerState: $("computerState"),
     refreshComputer: $("refreshComputer"),
     stopBtn: $("stopBtn"),
@@ -868,7 +884,208 @@
         (unsupported.length ? " · Not supported: " + unsupported.join(", ") : "")));
       el.sourceList.appendChild(li);
     } catch (_) { /* ignore */ }
+
+    await refreshObsidian();
   }
+
+  /* ── Obsidian ───────────────────────────────────────────────────────────
+     Every value rendered here comes from /api/obsidian/status, which walks
+     the vault on each request. Nothing below caches "connected" — a vault
+     that has gone away reads ERROR on the next refresh, which is the point
+     of the panel. */
+
+  async function refreshObsidian() {
+    let status;
+    try {
+      status = await api("/obsidian/status");
+    } catch (_) {
+      return;
+    }
+
+    el.obsState.textContent = status.state;
+    el.obsState.className =
+      "src-state " + (status.connected ? "on" : "off");
+    el.obsDetail.textContent = status.detail || "";
+
+    const config = status.config || {};
+    el.obsFacts.replaceChildren();
+    const facts = [
+      ["Vault", (status.vault && status.vault.name) || "—"],
+      ["Path", config.vault_path || "—"],
+      ["Connection", config.connection_type || "—"],
+      ["Last connection", stamp(config.last_connected_at)],
+      ["Last sync", stamp(config.last_synced_at)],
+      ["Indexed notes", String(config.indexed_notes ?? 0)],
+      ["Writes", config.allow_writes ? "allowed" : "off"],
+      ["Deletes", config.allow_deletes ? "allowed" : "off"],
+    ];
+    if (config.last_error) facts.push(["Last error", config.last_error]);
+    facts.forEach(([label, value]) => {
+      const row = node("div", "sys-row");
+      row.appendChild(node("span", "sys-key", label));
+      row.appendChild(node("span", "sys-val", value));
+      el.obsFacts.appendChild(row);
+    });
+
+    /* Capabilities are rendered from what the API reports, not from a fixed
+       list. A read-only vault genuinely does not offer CREATE, and showing a
+       greyed-out button for it would be claiming a capability that is not
+       there. */
+    el.obsCapabilities.replaceChildren();
+    (status.capabilities || []).forEach((capability) => {
+      el.obsCapabilities.appendChild(node("span", "obs-cap", capability));
+    });
+    if (!status.capabilities || !status.capabilities.length) {
+      el.obsCapabilities.appendChild(
+        node("span", "dim", "No capabilities — nothing is connected.")
+      );
+    }
+
+    el.obsConnectForm.hidden = status.connected;
+    el.obsConnect.hidden = status.connected;
+    el.obsTest.hidden = !status.configured;
+    el.obsSync.hidden = !status.connected;
+    el.obsDisconnect.hidden = !status.configured;
+
+    if (status.connected) {
+      await refreshObsidianConflicts();
+      await refreshObsidianAudit();
+    } else {
+      el.obsConflicts.hidden = true;
+      el.obsAudit.replaceChildren();
+    }
+  }
+
+  function stamp(value) {
+    return value ? new Date(value).toLocaleString() : "never";
+  }
+
+  async function refreshObsidianConflicts() {
+    try {
+      const body = await api("/obsidian/conflicts");
+      el.obsConflicts.hidden = !body.count;
+      el.obsConflictList.replaceChildren();
+      body.conflicts.forEach((conflict) => {
+        const li = node("li");
+        li.appendChild(node("div", "obs-conflict-path", conflict.note_path));
+        const actions = node("div", "obs-actions");
+        [
+          ["Keep Obsidian", "keep_obsidian"],
+          ["Keep JARVIS", "keep_jarvis"],
+          ["Merge", "merge"],
+          ["Cancel", "cancel"],
+        ].forEach(([label, resolution]) => {
+          const button = node("button", "ghost small", label);
+          button.addEventListener("click", async () => {
+            try {
+              const result = await api(
+                "/obsidian/conflicts/resolve?path=" +
+                  encodeURIComponent(conflict.note_path),
+                { method: "POST", body: { resolution: resolution } }
+              );
+              notice(el.obsNotice, result.detail || result.message);
+              await refreshObsidian();
+            } catch (err) {
+              notice(el.obsNotice, err.message);
+            }
+          });
+          actions.appendChild(button);
+        });
+        li.appendChild(actions);
+        el.obsConflictList.appendChild(li);
+      });
+    } catch (_) { /* ignore */ }
+  }
+
+  async function refreshObsidianAudit() {
+    try {
+      const body = await api("/obsidian/audit?limit=15");
+      el.obsAudit.replaceChildren();
+      if (!body.entries.length) {
+        el.obsAudit.appendChild(node("li", "dim", "Nothing yet."));
+      }
+      body.entries.forEach((entry) => {
+        const li = node("li");
+        const row = node("div", "src-row");
+        row.appendChild(node("span", "audit-kind", entry.operation || "—"));
+        row.appendChild(node("span", "audit-outcome ao-" + entry.status,
+          entry.status));
+        li.appendChild(row);
+        li.appendChild(node("div", "audit-detail", entry.summary));
+        el.obsAudit.appendChild(li);
+      });
+    } catch (_) { /* ignore */ }
+  }
+
+  function notice(element, message) {
+    element.textContent = message || "";
+    element.hidden = !message;
+  }
+
+  el.obsConnect.addEventListener("click", async () => {
+    const path = el.obsVaultPath.value.trim();
+    if (!path) {
+      notice(el.obsNotice, "Enter the folder your vault lives in.");
+      return;
+    }
+    try {
+      const result = await api("/obsidian/connect", {
+        method: "POST",
+        body: {
+          vault_path: path,
+          allow_writes: el.obsAllowWrites.checked,
+          allow_deletes: el.obsAllowDeletes.checked,
+        },
+      });
+      notice(el.obsNotice,
+        "Connected to " + result.vault + " — " + result.notes + " notes found.");
+      await refreshObsidian();
+    } catch (err) {
+      notice(el.obsNotice, err.message);
+    }
+  });
+
+  el.obsTest.addEventListener("click", async () => {
+    try {
+      const result = await api("/obsidian/test", { method: "POST" });
+      notice(el.obsNotice, result.connected
+        ? "Reachable — " + result.notes + " notes."
+        : result.detail);
+      await refreshObsidian();
+    } catch (err) {
+      notice(el.obsNotice, err.message);
+    }
+  });
+
+  el.obsSync.addEventListener("click", async () => {
+    notice(el.obsNotice, "Syncing…");
+    try {
+      const result = await api("/obsidian/sync", { method: "POST" });
+      notice(el.obsNotice,
+        result.indexed + " new, " + result.updated + " updated, " +
+        result.removed + " removed, " + result.skipped + " unchanged" +
+        (result.conflicts.length
+          ? ", " + result.conflicts.length + " conflict(s) to resolve"
+          : "."));
+      await refreshKnowledge();
+    } catch (err) {
+      notice(el.obsNotice, err.message);
+    }
+  });
+
+  el.obsDisconnect.addEventListener("click", async () => {
+    try {
+      await api("/obsidian/disconnect", { method: "POST" });
+      /* Deliberately not offering "and delete everything I learned" as a
+         one-click action here: disconnecting a source and destroying the
+         index are different intentions. The API supports it explicitly. */
+      notice(el.obsNotice,
+        "Disconnected. Your vault is untouched and indexed notes are kept.");
+      await refreshObsidian();
+    } catch (err) {
+      notice(el.obsNotice, err.message);
+    }
+  });
 
   el.uploadDoc.addEventListener("click", () => el.docFile.click());
 

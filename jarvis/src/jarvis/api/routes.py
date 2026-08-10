@@ -506,6 +506,7 @@ async def system_prompt(
 
 from jarvis.api.computer_routes import COMPUTER_ROUTERS  # noqa: E402
 from jarvis.api.memory_routes import MEMORY_ROUTERS  # noqa: E402
+from jarvis.api.obsidian_routes import OBSIDIAN_ROUTERS  # noqa: E402
 
 ALL_ROUTERS = [
     health_router,
@@ -518,5 +519,6 @@ ALL_ROUTERS = [
     activity_router,
     system_router,
     *MEMORY_ROUTERS,
+    *OBSIDIAN_ROUTERS,
     *COMPUTER_ROUTERS,
 ]

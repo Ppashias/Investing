@@ -120,6 +120,22 @@ class Settings(BaseSettings):
     #: the boundary that keeps it from reading ``~/.ssh``.
     knowledge_roots: list[Path] = Field(default_factory=list)
 
+    # ── Obsidian (Phase 2.5) ─────────────────────────────────────────────────
+    #: Optional bootstrap vault. The live configuration lives on the
+    #: ``knowledge_sources`` row so it can be changed from the UI without a
+    #: restart; this only seeds it on first run, which is what makes a
+    #: headless or scripted deployment possible.
+    obsidian_vault_path: Path | None = None
+    obsidian_vault_name: str | None = None
+    #: Both default off. Reading someone's notes and rewriting them are
+    #: different permissions, and an integration that can write by default is
+    #: one bad model turn away from an edit nobody asked for.
+    obsidian_allow_writes: bool = False
+    obsidian_allow_deletes: bool = False
+    #: Notes pulled per sync. A ceiling rather than a target — the sync is
+    #: incremental, so the usual run touches a handful.
+    obsidian_sync_limit: int = 5_000
+
     # ── computer control (Phase 3) ───────────────────────────────────────────
     #: Master switch. Off means the service still reports *why* nothing works,
     #: rather than the endpoints disappearing.
@@ -200,6 +216,14 @@ class Settings(BaseSettings):
                 "enabled": self.knowledge_enabled,
                 "max_injected": self.knowledge_max_injected,
                 "roots_configured": len(self.knowledge_roots),
+            },
+            "obsidian": {
+                # Whether a path is *configured*, never the path itself: this
+                # dict goes over the API and a home directory layout is
+                # personal information JARVIS has no reason to broadcast.
+                "bootstrap_configured": self.obsidian_vault_path is not None,
+                "allow_writes": self.obsidian_allow_writes,
+                "allow_deletes": self.obsidian_allow_deletes,
             },
             "computer": {
                 "enabled": self.computer_enabled,

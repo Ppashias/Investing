@@ -358,3 +358,46 @@ button:disabled{opacity:.45;cursor:not-allowed}
 .audit-meta{color:var(--dim);font-size:9.5px;margin-top:2px;line-height:1.5}
 .risk-HIGH,.risk-PROHIBITED{color:var(--red);font-weight:700}
 .risk-MEDIUM{color:var(--gold)} .risk-LOW{color:var(--dim)}
+
+/* ── Obsidian ──────────────────────────────────────────────────────────────
+   Reuses the computer panel's block/hint/audit language rather than
+   introducing a second visual vocabulary — this is one system, and a
+   knowledge source should not look like a different application. */
+.obsidian-block{border-top:1px solid #161d29}
+.obsidian-block .rail-head{padding:0 0 6px 0;border:0}
+
+.obs-caps{display:flex;flex-wrap:wrap;gap:4px;margin:7px 0}
+.obs-cap{
+  font-size:8.5px;font-weight:700;letter-spacing:.5px;color:var(--muted);
+  border:1px solid var(--border);border-radius:5px;padding:2px 5px;
+}
+
+.obs-form{margin-top:6px}
+.obs-label{
+  display:block;font-size:9.5px;letter-spacing:.5px;color:var(--dim);
+  margin-bottom:4px;text-transform:uppercase;
+}
+.obs-input{
+  width:100%;background:var(--sunk);color:var(--text);
+  border:1px solid var(--border);border-radius:7px;padding:6px 8px;
+  font-family:inherit;font-size:11px;
+}
+.obs-input:focus{outline:none;border-color:#2c4a6e}
+.obs-check{
+  display:flex;align-items:center;gap:6px;font-size:10.5px;color:var(--dim);
+  cursor:pointer;padding:3px 0;
+}
+.obs-check input[type=checkbox]{accent-color:var(--accent);cursor:pointer}
+
+.obs-actions{display:flex;flex-wrap:wrap;gap:6px;margin-top:8px}
+
+.obs-conflicts{margin-top:10px;border-top:1px solid #161d29;padding-top:8px}
+.obs-conflict-list{list-style:none;margin-top:4px}
+.obs-conflict-list li{padding:6px 0;border-bottom:1px solid #161d29}
+.obs-conflict-path{font-size:10.5px;color:var(--gold);font-weight:600}
+
+/* The audit statuses this panel emits, in the same colour language the
+   computer audit uses. */
+.ao-OK{color:var(--green)} .ao-CONNECTED{color:var(--green)}
+.ao-RESOLVED{color:var(--green)} .ao-DISCONNECTED{color:var(--dim)}
+.ao-ERROR{color:var(--red)} .ao-CONFLICT{color:var(--gold)}

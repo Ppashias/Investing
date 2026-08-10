@@ -149,6 +149,11 @@ class ActivityKind(str, enum.Enum):
     EMERGENCY_STOP = "EMERGENCY_STOP"
     MEMORY_RETRIEVED = "MEMORY_RETRIEVED"
     KNOWLEDGE_INGESTED = "KNOWLEDGE_INGESTED"
+    #: Anything JARVIS did to an external knowledge vault — connect, search,
+    #: read, create, update, delete, sync, and the refusals. Separate from
+    #: KNOWLEDGE_INGESTED so "what did JARVIS do to my Obsidian vault?" is one
+    #: filter rather than a guess.
+    OBSIDIAN_ACTION = "OBSIDIAN_ACTION"
     ERROR = "ERROR"
 
 

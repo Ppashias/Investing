@@ -14,6 +14,10 @@ dependencies = [
     "anthropic>=0.40",
     "httpx>=0.27",
     "structlog>=24.1",
+    # Obsidian frontmatter. Only ever `safe_load` — a vault is a folder anything
+    # can write to, and a loader that constructs Python objects would make it an
+    # execution primitive.
+    "pyyaml>=6",
 ]
 
 [project.optional-dependencies]

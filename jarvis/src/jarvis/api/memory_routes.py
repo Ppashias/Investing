@@ -532,6 +532,25 @@ def _knowledge(core: Any, session: Any, user_id: str) -> KnowledgeService:
     )
 
 
+async def _knowledge_with_sources(
+    core: Any, session: Any, user_id: str
+) -> KnowledgeService:
+    """The registry plus any external source the user has connected.
+
+    Separate from :func:`_knowledge` because building it needs a database read
+    — the Obsidian connection lives on a ``knowledge_sources`` row — and the
+    retrieval paths that do not care about provider registration should not
+    pay for it. ``/knowledge/sources`` is the caller that does.
+    """
+    from jarvis.knowledge.providers.obsidian import ObsidianService
+
+    service = _knowledge(core, session, user_id)
+    provider = await ObsidianService(session, user_id).provider()
+    if provider is not None:
+        service.register(provider)
+    return service
+
+
 @knowledge_router.get("/documents")
 async def list_documents(
     core: CoreDep,
@@ -708,14 +727,18 @@ async def ingest_from_path(
 async def knowledge_sources(
     core: CoreDep, session: SessionDep, user: UserDep, _: AuthDep
 ) -> dict[str, Any]:
-    """Registered providers plus planned ones (§30).
+    """Registered providers, each reporting real state.
 
-    Obsidian appears here with ``implemented: false``. That is the honest
-    rendering: omitting it would be indistinguishable from "not configured",
-    and showing it as connectable would be a lie.
+    Obsidian appears with ``implemented: true`` from Phase 2.5, and
+    ``connected`` reflecting whether a vault is actually reachable right now —
+    the two are different facts and the panel renders both. A vault that is
+    configured but unplugged reports connected=false with the reason, which is
+    the case that would otherwise be papered over.
     """
     return {
-        "sources": await _knowledge(core, session, user.id).provider_status(),
+        "sources": await (
+            await _knowledge_with_sources(core, session, user.id)
+        ).provider_status(),
         "formats": available_formats(),
         "roots": [str(p) for p in core.settings.knowledge_roots],
         "semantic_search": core.embeddings.info.semantic,

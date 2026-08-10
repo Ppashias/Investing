@@ -137,6 +137,7 @@ class JarvisCore:
             await self.tools.sync_to_db(session)
             user = await self.ensure_default_user(session)
             await seed_default_grants(session, user.id)
+            await self._bootstrap_obsidian(session, user.id)
             await session.commit()
 
         log.info(
@@ -154,6 +155,37 @@ class JarvisCore:
         log.info("jarvis_stopped")
 
     # ── helpers ──────────────────────────────────────────────────────────────
+
+    async def _bootstrap_obsidian(self, session: AsyncSession, user_id: str) -> None:
+        """Seed the vault connection from configuration, once.
+
+        Only when nothing is configured yet: the live configuration lives on
+        the ``knowledge_sources`` row so it can be changed from the UI, and a
+        setting that reasserted itself on every restart would silently undo the
+        user's choice to disconnect.
+
+        A failure is logged, not raised. A vault that has moved is a reason for
+        the panel to read DISCONNECTED, not a reason for the daemon to refuse
+        to start.
+        """
+        if self.settings.obsidian_vault_path is None:
+            return
+
+        from jarvis.knowledge.providers.obsidian import ObsidianService
+
+        service = ObsidianService(session, user_id)
+        if await service.row() is not None:
+            return
+
+        try:
+            await service.connect(
+                str(self.settings.obsidian_vault_path),
+                vault_name=self.settings.obsidian_vault_name,
+                allow_writes=self.settings.obsidian_allow_writes,
+                allow_deletes=self.settings.obsidian_allow_deletes,
+            )
+        except Exception as exc:
+            log.warning("obsidian_bootstrap_failed", error=str(exc))
 
     @staticmethod
     async def ensure_default_user(session: AsyncSession) -> User:

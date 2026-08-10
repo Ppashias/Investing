@@ -152,16 +152,18 @@ class ToolRegistry:
 
 
 def build_default_registry() -> ToolRegistry:
-    """The Phase 1 + 2 tool set.
+    """The Phase 1-3 tool set.
 
-    Still deliberately safe: nothing here can damage anything outside JARVIS's
-    own store, and the one bulk operation is marked irreversible so the
-    permission engine floors it to ASK. Filesystem, browser, shell, and screen
-    tools arrive in Phases 3-5 behind the same interface.
+    Three groups with genuinely different reach: the Phase 1-2 tools cannot
+    touch anything outside JARVIS's own store, the Obsidian tools write to the
+    user's notes, and the computer tools operate the machine. Each group routes
+    through its own chokepoint — the tool executor for all of them, plus
+    ``ObsidianService`` and ``ComputerService`` for the two that leave.
     """
     from jarvis.tools.builtin import (
         computer_tools,
         memory_tools,
+        obsidian_tools,
         system_tools,
         task_tools,
     )
@@ -170,5 +172,6 @@ def build_default_registry() -> ToolRegistry:
     registry.register_all(system_tools.TOOLS)
     registry.register_all(task_tools.TOOLS)
     registry.register_all(memory_tools.TOOLS)
+    registry.register_all(obsidian_tools.OBSIDIAN_TOOLS)
     registry.register_all(computer_tools.TOOLS)
     return registry
