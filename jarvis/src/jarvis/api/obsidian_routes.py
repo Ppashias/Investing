@@ -97,9 +97,18 @@ def _syncer(core: Any, session: Any, user_id: str, provider: Any) -> ObsidianSyn
 
 
 @obsidian_router.get("/discover")
-async def discover_vaults(_: AuthDep) -> dict[str, Any]:
-    """What is actually on this machine. Never guesses a path."""
-    return discover().to_dict()
+async def discover_vaults(
+    _: AuthDep,
+    name: Annotated[str | None, Query(max_length=200)] = None,
+) -> dict[str, Any]:
+    """What is actually on this machine. Never guesses a path.
+
+    ``?name=Jarvis`` narrows to a vault with that name — a vault's name in
+    Obsidian is its folder's basename, so "find the vault called Jarvis" is one
+    request. An empty result with ``requested_name`` set means *that* vault is
+    not here, which is a different fact from "there are no vaults".
+    """
+    return discover(name=name).to_dict()
 
 
 @obsidian_router.get("/status")

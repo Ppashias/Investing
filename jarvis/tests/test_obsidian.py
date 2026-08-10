@@ -948,3 +948,115 @@ async def test_bootstrap_failure_does_not_stop_startup(session, core, user, tmp_
     core.settings.obsidian_vault_path = tmp_path / "not-here"
     await core._bootstrap_obsidian(session, user.id)
     assert await ObsidianService(session, user.id).provider() is None
+
+
+# ── discovery (§3) ───────────────────────────────────────────────────────────
+
+
+def _make_vault(root: Path, name: str) -> Path:
+    target = root / name
+    (target / ".obsidian").mkdir(parents=True)
+    (target / "Welcome.md").write_text("# Welcome\n", encoding="utf-8")
+    return target
+
+
+def test_discovery_finds_a_vault_by_name(tmp_path: Path, monkeypatch) -> None:
+    """The task this exists for: 'find the vault called Jarvis'."""
+    from jarvis.knowledge.providers.obsidian import discovery
+
+    home = tmp_path / "home"
+    _make_vault(home / "Documents", "Jarvis")
+    _make_vault(home / "Documents", "Recipes")
+    monkeypatch.setattr(discovery, "_SCAN_ROOTS", (str(home / "Documents"),))
+
+    report = discovery.discover(name="Jarvis")
+    assert [v.name for v in report.vaults] == ["Jarvis"]
+    assert report.requested_name == "Jarvis"
+    assert report.vaults[0].has_obsidian_config is True
+
+
+def test_discovery_by_name_is_case_insensitive(tmp_path: Path, monkeypatch) -> None:
+    from jarvis.knowledge.providers.obsidian import discovery
+
+    home = tmp_path / "home"
+    _make_vault(home, "Jarvis")
+    monkeypatch.setattr(discovery, "_SCAN_ROOTS", (str(home),))
+    assert discovery.discover(name="jarvis").vaults[0].name == "Jarvis"
+
+
+def test_a_named_vault_that_is_absent_says_so(tmp_path: Path, monkeypatch) -> None:
+    """An empty result with a requested name means 'that one is not here',
+    which is a different fact from 'there are no vaults'."""
+    from jarvis.knowledge.providers.obsidian import discovery
+
+    home = tmp_path / "home"
+    _make_vault(home, "SomethingElse")
+    monkeypatch.setattr(discovery, "_SCAN_ROOTS", (str(home),))
+
+    report = discovery.discover(name="Jarvis")
+    assert report.vaults == []
+    assert report.needs_manual_configuration is True
+    assert "'Jarvis'" in report.notes[0]
+    assert report.searched, "a not-found claim must say where it looked"
+
+
+def test_discovery_reaches_a_grouped_vault(tmp_path: Path, monkeypatch) -> None:
+    """``Documents/Obsidian/Jarvis`` — people group their vaults in a folder,
+    and a one-level scan reports 'no vault found' on a machine that has one."""
+    from jarvis.knowledge.providers.obsidian import discovery
+
+    home = tmp_path / "home"
+    _make_vault(home / "Documents" / "Obsidian", "Jarvis")
+    monkeypatch.setattr(discovery, "_SCAN_ROOTS", (str(home / "Documents"),))
+    assert [v.name for v in discovery.discover(name="Jarvis").vaults] == ["Jarvis"]
+
+
+def test_discovery_covers_a_onedrive_redirected_documents(
+    tmp_path: Path, monkeypatch
+) -> None:
+    """Windows redirects Documents into OneDrive by default for consumer
+    accounts, so a vault in what the user calls Documents is not under
+    ``~/Documents`` at all."""
+    from jarvis.knowledge.providers.obsidian import discovery
+
+    home = tmp_path / "home"
+    _make_vault(home / "OneDrive" / "Documents", "Jarvis")
+    monkeypatch.setattr(
+        discovery, "_SCAN_ROOTS",
+        (str(home / "Documents"), str(home / "OneDrive" / "Documents")),
+    )
+    found = discovery.discover(name="Jarvis").vaults
+    assert [v.name for v in found] == ["Jarvis"]
+    assert "OneDrive" in found[0].path
+
+
+def test_discovery_does_not_descend_into_a_vault(tmp_path: Path, monkeypatch) -> None:
+    from jarvis.knowledge.providers.obsidian import discovery
+
+    home = tmp_path / "home"
+    vault = _make_vault(home, "Jarvis")
+    (vault / "Nested" / ".obsidian").mkdir(parents=True)
+    monkeypatch.setattr(discovery, "_SCAN_ROOTS", (str(home),))
+    assert [v.name for v in discovery.discover().vaults] == ["Jarvis"]
+
+
+def test_discovery_prunes_expensive_directories(tmp_path: Path, monkeypatch) -> None:
+    from jarvis.knowledge.providers.obsidian import discovery
+
+    home = tmp_path / "home"
+    _make_vault(home / "node_modules", "Jarvis")
+    monkeypatch.setattr(discovery, "_SCAN_ROOTS", (str(home),))
+    assert discovery.discover(name="Jarvis").vaults == []
+
+
+def test_discovery_never_returns_a_path_that_is_not_there(tmp_path: Path, monkeypatch) -> None:
+    """§3: do not invent a path. Every reported vault must be a real
+    directory containing a real .obsidian/."""
+    from jarvis.knowledge.providers.obsidian import discovery
+
+    home = tmp_path / "home"
+    _make_vault(home, "Jarvis")
+    monkeypatch.setattr(discovery, "_SCAN_ROOTS", (str(home),))
+    for vault in discovery.discover().vaults:
+        assert Path(vault.path).is_dir()
+        assert (Path(vault.path) / ".obsidian").is_dir()

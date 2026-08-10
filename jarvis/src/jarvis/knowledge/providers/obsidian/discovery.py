@@ -38,13 +38,50 @@ _REGISTRY_PATHS: dict[str, list[str]] = {
         "~/snap/obsidian/current/.config/obsidian/obsidian.json",
     ],
     "Darwin": ["~/Library/Application Support/obsidian/obsidian.json"],
-    "Windows": ["~/AppData/Roaming/obsidian/obsidian.json"],
+    "Windows": [
+        "~/AppData/Roaming/obsidian/obsidian.json",
+        # Roaming can be redirected on managed machines; Local is where the
+        # app falls back to.
+        "~/AppData/Local/obsidian/obsidian.json",
+    ],
 }
 
-#: Directories worth a shallow look when the registry is absent. Two levels
-#: deep, which covers ``~/Documents/MyVault`` and ``~/Notes`` without walking
-#: an entire home directory.
-_SCAN_ROOTS = ("~", "~/Documents", "~/Notes", "~/Obsidian", "~/vaults")
+#: Directories worth a look when the registry is absent.
+#:
+#: The OneDrive entries are not padding. On Windows, "Documents" is very often
+#: redirected to ``%USERPROFILE%\OneDrive\Documents`` — Microsoft turns Known
+#: Folder Move on by default for consumer accounts — so a vault sitting in what
+#: the user calls Documents is not under ``~/Documents`` at all. A discovery
+#: that misses it reports "no vault found" on a machine that has one, which is
+#: the most misleading answer available.
+_SCAN_ROOTS = (
+    "~",
+    "~/Documents",
+    "~/OneDrive",
+    "~/OneDrive/Documents",
+    "~/OneDrive - Personal/Documents",
+    "~/Notes",
+    "~/Obsidian",
+    "~/vaults",
+    "~/Vaults",
+    "~/Dropbox",
+    "~/iCloudDrive",
+    "~/Library/Mobile Documents/iCloud~md~obsidian/Documents",
+)
+
+#: How far below each scan root to look. Two levels, because the common layouts
+#: are ``~/Documents/MyVault`` (one) and ``~/Documents/Obsidian/MyVault`` (two)
+#: — people group their vaults in a folder. Three would start walking source
+#: trees and node_modules for no gain.
+_SCAN_DEPTH = 2
+
+#: Never descended into. Cheap insurance against a scan root that happens to
+#: contain a large tree.
+_SKIP_DIRS = frozenset(
+    {"node_modules", ".git", "AppData", "Library", "Applications",
+     "Windows", "Program Files", "Program Files (x86)", "$Recycle.Bin",
+     "venv", ".venv", "__pycache__", "site-packages"}
+)
 
 
 @dataclass(slots=True)
@@ -75,6 +112,13 @@ class DiscoveryReport:
     registry_found: bool = False
     vaults: list[DiscoveredVault] = field(default_factory=list)
     notes: list[str] = field(default_factory=list)
+    #: Echoed back when the caller asked for a specific vault, so an empty
+    #: result reads as "that one is not here" rather than "there are none".
+    requested_name: str | None = None
+    #: Where the scan looked. Reported so "not found" is a checkable claim
+    #: instead of an assertion — the user can see whether their vault's
+    #: location was even considered.
+    searched: list[str] = field(default_factory=list)
 
     @property
     def needs_manual_configuration(self) -> bool:
@@ -85,35 +129,60 @@ class DiscoveryReport:
             "obsidian_installed": self.obsidian_installed,
             "obsidian_running": self.obsidian_running,
             "registry_found": self.registry_found,
+            "requested_name": self.requested_name,
             "vaults": [v.to_dict() for v in self.vaults],
             "needs_manual_configuration": self.needs_manual_configuration,
+            "searched": self.searched,
             "notes": self.notes,
         }
 
 
-def discover() -> DiscoveryReport:
-    """Look for vaults. Never guesses, never writes."""
+def discover(*, name: str | None = None) -> DiscoveryReport:
+    """Look for vaults. Never guesses, never writes.
+
+    ``name`` filters to a vault with that name, case-insensitively — a vault's
+    name in Obsidian is its folder's basename, so "find the vault called
+    Jarvis" is answerable directly rather than by eyeballing a list. The
+    registry is consulted first because Obsidian wrote it, then a bounded
+    scan; when a name is given the scan runs even if the registry produced
+    results, since the named vault may be one the app has never opened.
+    """
     report = DiscoveryReport()
     report.obsidian_installed = _obsidian_installed()
     report.obsidian_running = _obsidian_running()
+    report.requested_name = name
 
+    wanted = name.strip().lower() if name else None
     seen: set[str] = set()
-    for vault in _from_registry(report):
-        if vault.path not in seen:
-            seen.add(vault.path)
-            report.vaults.append(vault)
 
+    def add(vault: DiscoveredVault) -> None:
+        if vault.path in seen:
+            return
+        if wanted and vault.name.lower() != wanted:
+            return
+        seen.add(vault.path)
+        report.vaults.append(vault)
+
+    for vault in _from_registry(report):
+        add(vault)
+
+    # A name that the registry did not answer is worth scanning for: a vault
+    # created but not yet opened in Obsidian is absent from the registry and
+    # present on disk.
     if not report.vaults:
-        for vault in _from_scan():
-            if vault.path not in seen:
-                seen.add(vault.path)
-                report.vaults.append(vault)
+        for vault in _from_scan(report.searched):
+            add(vault)
 
     if not report.vaults:
         report.notes.append(
-            "No Obsidian vault was found on this machine. A vault is a folder "
-            "of Markdown files, so JARVIS needs to be told where one is — set "
-            "the vault path in the Obsidian panel or JARVIS_OBSIDIAN_VAULT_PATH."
+            (
+                f"No Obsidian vault named {name!r} was found on this machine."
+                if name
+                else "No Obsidian vault was found on this machine."
+            )
+            + " A vault is a folder of Markdown files, so JARVIS needs to be "
+            "told where one is — set the vault path in the Obsidian panel or "
+            "JARVIS_OBSIDIAN_VAULT_PATH."
         )
     if not report.obsidian_installed:
         report.notes.append(
@@ -195,21 +264,32 @@ def _from_registry(report: DiscoveryReport) -> list[DiscoveredVault]:
     return found
 
 
-def _from_scan() -> list[DiscoveredVault]:
-    """Shallow scan for ``.obsidian/`` directories. Two levels, no deeper."""
+def _from_scan(searched: list[str] | None = None) -> list[DiscoveredVault]:
+    """Bounded scan for ``.obsidian/`` directories.
+
+    Breadth-first to :data:`_SCAN_DEPTH` under each root, pruning the
+    directories in :data:`_SKIP_DIRS`. A vault found at depth 2 covers the
+    common ``Documents/Obsidian/MyVault`` grouping that a one-level scan
+    misses — and missing it reports "no vault found" on a machine that has
+    one, which is worse than reporting nothing at all.
+    """
     found: list[DiscoveredVault] = []
     for template in _SCAN_ROOTS:
         root = Path(template).expanduser()
         if not root.is_dir():
             continue
-        try:
-            candidates = [root, *[p for p in root.iterdir() if p.is_dir()]]
-        except OSError:
-            continue
-        for candidate in candidates:
-            if candidate.name.startswith("."):
+        if searched is not None:
+            searched.append(str(root))
+
+        frontier = [(root, 0)]
+        while frontier:
+            candidate, depth = frontier.pop(0)
+            try:
+                is_vault = (candidate / ".obsidian").is_dir()
+            except OSError:
                 continue
-            if (candidate / ".obsidian").is_dir():
+
+            if is_vault:
                 found.append(
                     DiscoveredVault(
                         name=candidate.name,
@@ -219,4 +299,17 @@ def _from_scan() -> list[DiscoveredVault]:
                         accessible=os.access(candidate, os.R_OK),
                     )
                 )
+                # A vault is not nested inside another vault; stop here.
+                continue
+
+            if depth >= _SCAN_DEPTH:
+                continue
+            try:
+                children = sorted(p for p in candidate.iterdir() if p.is_dir())
+            except OSError:
+                continue
+            for child in children:
+                if child.name.startswith(".") or child.name in _SKIP_DIRS:
+                    continue
+                frontier.append((child, depth + 1))
     return found

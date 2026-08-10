@@ -213,7 +213,7 @@ except `/api/health`.
 | `POST` | `/knowledge/ingest/upload` | Ingest an uploaded file. |
 | `POST` | `/knowledge/ingest/path` | Ingest from an allow-listed directory. |
 | `GET` | `/knowledge/sources` | Providers, formats, roots. |
-| `GET` | `/obsidian/discover` | Vaults found on this machine. Never guesses. |
+| `GET` | `/obsidian/discover` | Vaults on this machine; `?name=` filters. Never guesses. |
 | `GET` | `/obsidian/status` | Connection state, walked live. |
 | `POST` | `/obsidian/connect` · `/test` · `/disconnect` | Connection lifecycle. |
 | `GET` | `/obsidian/notes` · `/folders` · `/note` | List and read. |
@@ -397,6 +397,13 @@ Implemented as of Phase 2.5, behind the same `KnowledgeProvider` interface as
 everything else. Point JARVIS at the folder your notes live in — in the
 Obsidian panel, or with `JARVIS_OBSIDIAN_VAULT_PATH`.
 
+JARVIS has to be **running on the machine the vault is on** — the transport
+reads the vault's files, which is what lets it work without Obsidian running,
+and is also why a vault on your laptop is not reachable from a JARVIS running
+in a container. `GET /api/obsidian/discover?name=Jarvis` asks where JARVIS can
+see a vault by that name, and reports which directories it searched so a
+"not found" is checkable rather than asserted.
+
 **JARVIS reads the vault files directly.** Obsidian does not need to be
 running, or installed. There is no plugin, no API key, and no local port. That
 choice is argued in full in `docs/jarvis/04-phase2.5-obsidian.md`; the short
@@ -512,7 +519,7 @@ automatically — there is no way to opt out.
 ## Development
 
 ```bash
-./.venv/bin/python -m pytest            # 555 tests
+./.venv/bin/python -m pytest            # 565 tests
 ./.venv/bin/alembic revision --autogenerate -m "what changed"
 ./.venv/bin/alembic upgrade head
 ```

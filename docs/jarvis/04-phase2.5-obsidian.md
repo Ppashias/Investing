@@ -153,7 +153,55 @@ Both were invisible to the fixtures and appeared on the first run against real n
 
 ---
 
-## 8. What is not implemented
+## 8. Connecting your own vault
+
+JARVIS has to be **running on the machine the vault is on**. The transport
+reads the vault's files directly, which is what makes it work without Obsidian
+running — and it is also why a vault on your laptop is not reachable from a
+JARVIS running in a cloud container. There is no network protocol to reach
+across; that is the trade the filesystem transport makes.
+
+On the machine with the vault:
+
+```bash
+# 1. Ask JARVIS where it can see a vault by that name.
+curl -H "Authorization: Bearer $JARVIS_API_TOKEN" \
+     "http://127.0.0.1:8787/api/obsidian/discover?name=Jarvis"
+
+# 2. Connect to what it found (or to a path you know).
+curl -X POST -H "Authorization: Bearer $JARVIS_API_TOKEN" \
+     -H "Content-Type: application/json" \
+     -d '{"vault_path": "C:/Users/you/Documents/Jarvis", "allow_writes": true}' \
+     http://127.0.0.1:8787/api/obsidian/connect
+```
+
+or open the Knowledge tab and paste the folder into the Obsidian panel, which
+does the same two calls.
+
+**A vault's name is its folder's basename** — that is Obsidian's own rule, so
+a vault called `Jarvis` lives in a folder called `Jarvis`. `?name=` filters on
+it case-insensitively.
+
+### Where discovery looks
+
+The registry Obsidian itself writes (`obsidian.json` under `AppData/Roaming`,
+`~/Library/Application Support`, `~/.config`, Flatpak and Snap paths) is
+consulted first, because the app wrote it and it names vaults the user
+actually opened. A vault created but never opened is absent from it, so a
+bounded scan runs too: two levels deep under the home directory, Documents,
+Notes, Obsidian, Vaults, Dropbox, iCloud, and **OneDrive**.
+
+That last one is not padding. Windows redirects Documents into
+`%USERPROFILE%\OneDrive\Documents` by default for consumer accounts, so a
+vault in what the user calls Documents is not under `~/Documents` at all — and
+a discovery that misses it reports "no vault found" on a machine that has one,
+which is the most misleading answer available.
+
+The report includes a `searched` list, so "not found" is a checkable claim
+rather than an assertion: you can see whether your vault's location was even
+considered, and if it was not, the answer is to paste the path.
+
+## 9. What is not implemented
 
 - **Push-based automatic sync.** Pull is the only automatic direction. Writing back is explicit, permission-checked and audited. §23 forbids unrestricted bidirectional sync, and the reason is that it is how people lose hand-written notes.
 - **The Local REST API transport.** Evaluated and rejected above. The seam is in place.
