@@ -16,16 +16,27 @@
     Your Obsidian vault folder, e.g. C:\Projects\Jarvis. Optional — you can
     also connect from the Obsidian panel in the UI once JARVIS is running.
 
+.PARAMETER AllowWrites
+    Let JARVIS create and update notes in the vault. Off by default: reading
+    your notes and rewriting them are different permissions. Writes still ask
+    for approval each time.
+
+.PARAMETER AllowDeletes
+    Let JARVIS delete notes. Off by default, separate from -AllowWrites, and
+    always confirmed.
+
 .PARAMETER SkipTests
     Skip the verification test run.
 
 .EXAMPLE
-    .\setup-windows.ps1 -VaultPath C:\Projects\Jarvis
+    .\setup-windows.ps1 -VaultPath C:\Projects\Jarvis -AllowWrites
 #>
 
 [CmdletBinding()]
 param(
     [string]$VaultPath,
+    [switch]$AllowWrites,
+    [switch]$AllowDeletes,
     [switch]$SkipTests
 )
 
@@ -186,6 +197,17 @@ if ($VaultPath) {
         $envLines = Set-EnvValue $envLines "JARVIS_OBSIDIAN_VAULT_PATH" $resolved
         Write-Ok "Vault path recorded: $resolved"
     }
+}
+
+# Only written when asked for. Absent flags leave whatever is already in .env
+# alone, so re-running setup never silently widens permissions.
+if ($AllowWrites) {
+    $envLines = Set-EnvValue $envLines "JARVIS_OBSIDIAN_ALLOW_WRITES" "true"
+    Write-Ok "JARVIS may create and update notes (each write still asks)"
+}
+if ($AllowDeletes) {
+    $envLines = Set-EnvValue $envLines "JARVIS_OBSIDIAN_ALLOW_DELETES" "true"
+    Write-Ok "JARVIS may delete notes (each deletion still asks)"
 }
 
 # Written without a BOM. Windows PowerShell 5.1's `-Encoding UTF8` emits one,
