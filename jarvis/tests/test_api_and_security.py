@@ -281,3 +281,76 @@ def test_short_values_are_not_scrubbed() -> None:
     register_secret_value("abc")
     assert scrub_text("abc is fine") == "abc is fine"
     clear_registered_secrets()
+
+
+# ── credentials from .env (the Windows setup path) ───────────────────────────
+
+
+def test_a_token_in_dotenv_is_found(tmp_path, monkeypatch) -> None:
+    """The bug a real Windows install found.
+
+    Settings read .env through pydantic-settings, but that populates setting
+    *fields* and exports nothing to os.environ — while every credential is
+    fetched by name through jarvis.secrets, which only read os.environ. So a
+    token in .env resolved to nothing, and the README told people to put it
+    there. The development environment always exported the variable in a
+    shell, which is why nothing noticed.
+    """
+    from jarvis.secrets import default_secrets_provider
+
+    env_file = tmp_path / ".env"
+    env_file.write_text("JARVIS_API_TOKEN=tok-from-dotenv\n", encoding="utf-8")
+    monkeypatch.setenv("JARVIS_ENV_FILE", str(env_file))
+    monkeypatch.delenv("JARVIS_API_TOKEN", raising=False)
+
+    secret = default_secrets_provider().get("JARVIS_API_TOKEN")
+    assert secret is not None
+    assert secret.reveal() == "tok-from-dotenv"
+
+
+def test_a_bom_does_not_eat_the_first_credential(tmp_path, monkeypatch) -> None:
+    """Windows PowerShell writes UTF-8 *with* a BOM.
+
+    Read as plain utf-8, the BOM becomes part of the first key's name — so the
+    first credential in the file, and only that one, silently fails to resolve.
+    """
+    from jarvis.secrets import default_secrets_provider
+
+    env_file = tmp_path / ".env"
+    env_file.write_text("JARVIS_API_TOKEN=tok-with-bom\n", encoding="utf-8-sig")
+    monkeypatch.setenv("JARVIS_ENV_FILE", str(env_file))
+    monkeypatch.delenv("JARVIS_API_TOKEN", raising=False)
+
+    assert default_secrets_provider().get("JARVIS_API_TOKEN").reveal() == "tok-with-bom"
+
+
+def test_the_environment_still_wins_over_dotenv(tmp_path, monkeypatch) -> None:
+    """The documented precedence: a shell export overrides the file."""
+    from jarvis.secrets import default_secrets_provider
+
+    env_file = tmp_path / ".env"
+    env_file.write_text("JARVIS_API_TOKEN=from-file\n", encoding="utf-8")
+    monkeypatch.setenv("JARVIS_ENV_FILE", str(env_file))
+    monkeypatch.setenv("JARVIS_API_TOKEN", "from-environment")
+
+    assert default_secrets_provider().get(
+        "JARVIS_API_TOKEN"
+    ).reveal() == "from-environment"
+
+
+def test_quoted_and_commented_values_are_handled(tmp_path, monkeypatch) -> None:
+    from jarvis.secrets import default_secrets_provider
+
+    env_file = tmp_path / ".env"
+    env_file.write_text(
+        '# JARVIS_API_TOKEN=commented-out\n'
+        'ANTHROPIC_API_KEY="sk-quoted"\n',
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("JARVIS_ENV_FILE", str(env_file))
+    monkeypatch.delenv("JARVIS_API_TOKEN", raising=False)
+    monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+
+    provider = default_secrets_provider()
+    assert provider.get("JARVIS_API_TOKEN") is None, "a commented line is not a value"
+    assert provider.get("ANTHROPIC_API_KEY").reveal() == "sk-quoted"

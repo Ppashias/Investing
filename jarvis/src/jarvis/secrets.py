@@ -18,6 +18,7 @@ to print.
 from __future__ import annotations
 
 import os
+from pathlib import Path
 from typing import Protocol, runtime_checkable
 
 import structlog
@@ -80,6 +81,65 @@ class EnvSecretsProvider:
             return None
         raw = raw.strip()
         return Secret(raw, name=key) if raw else None
+
+
+class DotEnvSecretsProvider:
+    """Reads from the ``.env`` file the settings are loaded from.
+
+    Without this, a credential in ``.env`` is invisible. ``Settings`` reads the
+    file through pydantic-settings, but that populates *setting fields* — it
+    does not export anything into ``os.environ``, and every credential is
+    fetched by name through this module rather than from a settings field. So
+    ``JARVIS_API_TOKEN=…`` in ``.env`` resolved to nothing, while the README
+    told people to put it there. That gap survived because the development
+    environment always exported the variable in the shell.
+
+    The file is re-read on each miss rather than cached: it is a handful of
+    lines, credentials are fetched rarely, and caching would mean editing
+    ``.env`` had no effect until a restart — which is precisely the confusing
+    behaviour this exists to remove.
+    """
+
+    name = "dotenv"
+
+    def __init__(self, path: "Path | str | None" = None) -> None:
+        self._explicit = Path(path) if path else None
+
+    def _path(self) -> "Path | None":
+        if self._explicit is not None:
+            return self._explicit
+        # Imported lazily: config imports this module, so a module-level import
+        # of config here would be circular.
+        from jarvis.config import REPO_ROOT
+
+        candidate = Path(os.environ.get("JARVIS_ENV_FILE", REPO_ROOT / ".env"))
+        return candidate if candidate.is_file() else None
+
+    def get(self, key: str) -> Secret | None:
+        path = self._path()
+        if path is None:
+            return None
+        try:
+            # utf-8-sig, not utf-8: Windows PowerShell writes UTF-8 *with* a
+            # BOM, and the BOM would otherwise become part of the first key's
+            # name — making exactly the first credential in the file unreadable.
+            text = path.read_text(encoding="utf-8-sig")
+        except OSError:
+            return None
+
+        for line in text.splitlines():
+            line = line.strip()
+            if not line or line.startswith("#") or "=" not in line:
+                continue
+            name, _, raw = line.partition("=")
+            if name.strip() != key:
+                continue
+            raw = raw.strip()
+            # Strip one layer of matching quotes, the way dotenv readers do.
+            if len(raw) >= 2 and raw[0] == raw[-1] and raw[0] in "\"'":
+                raw = raw[1:-1]
+            return Secret(raw, name=key) if raw else None
+        return None
 
 
 class KeyringSecretsProvider:
@@ -146,4 +206,17 @@ class ChainSecretsProvider:
 
 
 def default_secrets_provider(*, service: str = "jarvis") -> ChainSecretsProvider:
-    return ChainSecretsProvider([EnvSecretsProvider(), KeyringSecretsProvider(service)])
+    """Environment, then ``.env``, then the OS keychain.
+
+    That order is the one the README documents: "the environment is checked
+    first, so a value in .env overrides the keychain". A shell export stays the
+    quickest way to override anything, ``.env`` is where a local setup puts
+    things, and the keychain is the right resting place for a live credential.
+    """
+    return ChainSecretsProvider(
+        [
+            EnvSecretsProvider(),
+            DotEnvSecretsProvider(),
+            KeyringSecretsProvider(service),
+        ]
+    )
