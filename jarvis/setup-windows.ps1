@@ -94,6 +94,17 @@ Write-Host  "    (first run downloads a few packages; this takes a minute)"
 if ($LASTEXITCODE -ne 0) { Write-Fail "Dependency installation failed"; exit 1 }
 Write-Ok "Installed"
 
+# Import the application before doing anything else with it. A missing runtime
+# dependency shows up here as one clear line, rather than later as an
+# ImportError inside a test runner where the useful part is easy to lose.
+& $venvPython -c "from jarvis.api.app import create_app" 2>&1 | ForEach-Object { $_ }
+if ($LASTEXITCODE -ne 0) {
+    Write-Fail "JARVIS could not be imported - see the error above."
+    Write-Host  "    This usually means a dependency is missing. Send me that output."
+    exit 1
+}
+Write-Ok "JARVIS imports cleanly"
+
 # ── 4. Configuration ─────────────────────────────────────────────────────────
 # .env lives beside this script because that is where the application reads it
 # from: config.py resolves REPO_ROOT to the `jarvis` package directory.
@@ -162,11 +173,20 @@ Write-Ok "Schema is up to date"
 # ── 6. Verify ────────────────────────────────────────────────────────────────
 if (-not $SkipTests) {
     Write-Step "Verifying the installation"
-    & $venvPython -m pytest -q --no-header 2>&1 | Select-Object -Last 5
+    Write-Host  "    (about a minute; some tests skip - they need a Linux X server)"
+
+    # The whole output is captured and only *summarised* on success. On failure
+    # it is printed in full: truncating to the last few lines is exactly what
+    # loses the traceback that says which import failed.
+    $testOutput = & $venvPython -m pytest -q --no-header 2>&1
     if ($LASTEXITCODE -ne 0) {
-        Write-Warn2 "Some tests failed. JARVIS may still run; see the output above."
+        Write-Warn2 "Some tests did not pass. Full output follows."
+        $testOutput | ForEach-Object { Write-Host "    $_" }
+        Write-Host ""
+        Write-Warn2 "JARVIS may still start. Try .\start-jarvis.ps1, and send me"
+        Write-Host  "        the output above if it does not."
     } else {
-        Write-Ok "Tests pass"
+        ($testOutput | Select-Object -Last 1) | ForEach-Object { Write-Ok $_ }
     }
 }
 

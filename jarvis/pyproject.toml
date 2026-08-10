@@ -18,6 +18,17 @@ dependencies = [
     # can write to, and a loader that constructs Python objects would make it an
     # execution primitive.
     "pyyaml>=6",
+    # Tool-argument validation. Imported unguarded by tools/executor.py, which
+    # every request path reaches.
+    "jsonschema>=4.20",
+    # Vector search. memory/vectors.py imports it at module level and the
+    # knowledge and memory services both import that, so the API cannot start
+    # without it.
+    "numpy>=1.26",
+    # FastAPI needs it to accept the document-upload form. Not an optional
+    # extra: without it `create_app` raises while building the route table, so
+    # the whole API fails to start, not just uploads.
+    "python-multipart>=0.0.9",
 ]
 
 [project.optional-dependencies]
