@@ -85,7 +85,7 @@ async def health(core: CoreDep) -> dict[str, Any]:
     """Liveness only — deliberately reveals nothing about configuration."""
     return {
         "status": "ok",
-        "phase": 1,
+        "phase": 2,
         "providers_configured": len(core.providers.configured()),
         "time": datetime.now(timezone.utc).isoformat(),
     }
@@ -460,24 +460,47 @@ async def system_status(core: CoreDep, _: AuthDep) -> dict[str, Any]:
 
 
 @system_router.get("/prompt")
-async def system_prompt(core: CoreDep, session: SessionDep, user: UserDep,
-                        _: AuthDep) -> dict[str, Any]:
+async def system_prompt(
+    core: CoreDep,
+    session: SessionDep,
+    user: UserDep,
+    _: AuthDep,
+    q: str | None = None,
+    project_id: str | None = None,
+) -> dict[str, Any]:
     """Show exactly what JARVIS is told.
 
     Inspectable on purpose — when behaviour surprises you, the first question
     is what the prompt actually said.
+
+    Pass ``q`` to see the prompt for a specific request, including the memory
+    and knowledge blocks retrieval would produce for it. Without it the
+    retrieval blocks are absent, which is accurate rather than incomplete:
+    nothing is retrieved for a request that does not exist.
     """
     from jarvis.context.manager import ContextManager
     from jarvis.prompts.builder import SystemPromptBuilder
 
-    bundle = await ContextManager(session).assemble(
-        user_id=user.id, conversation_id=None
+    bundle = await ContextManager(
+        session,
+        embeddings=core.embeddings,
+        memory_enabled=core.settings.memory_enabled,
+        knowledge_enabled=core.settings.knowledge_enabled,
+    ).assemble(
+        user_id=user.id,
+        conversation_id=None,
+        project_id=project_id,
+        query=q,
     )
     prompt = SystemPromptBuilder().build(bundle)
     return {
         "blocks": prompt.describe(),
         "approx_tokens": prompt.approx_tokens,
         "rendered": prompt.render(),
+        # Why those memories and not others — the same question the Memory UI
+        # answers per-memory, answered here for the whole prompt.
+        "retrieval": bundle.retrieval,
+        "tainted": bundle.tainted,
     }
 
 

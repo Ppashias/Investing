@@ -131,6 +131,25 @@ def test_system_prompt_is_inspectable(client: TestClient) -> None:
     body = client.get("/api/system/prompt").json()
     ids = {b["id"] for b in body["blocks"]}
     assert {"identity", "behavior", "security", "runtime"} <= ids
+    # No query means nothing was retrieved, which is accurate rather than
+    # incomplete — there is no request to retrieve for.
+    assert "memory" not in ids
+
+
+def test_system_prompt_shows_what_a_query_would_retrieve(client: TestClient) -> None:
+    client.post(
+        "/api/memories",
+        json={"content": "The user prefers dark mode", "type": "USER_PREFERENCE",
+              "subject": "interface theme"},
+    )
+    body = client.get("/api/system/prompt", params={"q": "dark mode"}).json()
+    assert "memory" in {b["id"] for b in body["blocks"]}
+    assert "dark mode" in body["rendered"]
+    assert body["retrieval"]["memories"], "the ranking must be inspectable"
+
+
+def test_health_reports_the_current_phase(client: TestClient) -> None:
+    assert client.get("/api/health").json()["phase"] == 2
 
 
 def test_security_headers_present(client: TestClient) -> None:
