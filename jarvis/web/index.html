@@ -1,0 +1,123 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="JARVIS">
+<meta name="theme-color" content="#05080f">
+<title>JARVIS — Command Center</title>
+<link rel="stylesheet" href="/assets/app.css">
+</head>
+<body>
+
+<header class="topbar">
+  <div class="brand">JARVIS<em>core</em></div>
+  <div class="topbar-status">
+    <span id="providerBadge" class="badge">checking…</span>
+    <span id="connBadge" class="badge">offline</span>
+  </div>
+</header>
+
+<!-- Auth gate. Shown only when the API answers 401. -->
+<div id="authGate" class="auth-gate" hidden>
+  <div class="auth-card">
+    <h2>Access token required</h2>
+    <p>
+      JARVIS is listening on localhost, but localhost is shared with every other
+      program on this machine. Paste the token from your <code>.env</code>
+      (<code>JARVIS_API_TOKEN</code>).
+    </p>
+    <input type="password" id="tokenInput" placeholder="Access token" autocomplete="off" spellcheck="false">
+    <button id="tokenSave" class="primary">Connect</button>
+    <p id="authError" class="auth-error" hidden></p>
+  </div>
+</div>
+
+<main class="layout">
+
+  <!-- ── conversation ─────────────────────────────────────────────────── -->
+  <section class="panel chat-panel">
+    <div class="panel-head">
+      <h3>Conversation <small id="convTitle">new</small></h3>
+      <button id="newConvBtn" class="ghost">New</button>
+    </div>
+
+    <div id="messages" class="messages">
+      <div class="empty-state">
+        <p>Tell JARVIS what you want.</p>
+        <span>Phase 1: conversation, tasks, tools, permissions. Memory, computer control, and agents are not built yet.</span>
+      </div>
+    </div>
+
+    <div id="thinking" class="thinking" hidden>
+      <span class="dot"></span><span class="dot"></span><span class="dot"></span>
+      <span id="thinkingLabel">working…</span>
+    </div>
+
+    <form id="composer" class="composer">
+      <textarea id="input" rows="1" placeholder="Message JARVIS…  (Enter to send, Shift+Enter for newline)" autocomplete="off"></textarea>
+      <button type="submit" id="sendBtn" class="primary">Send</button>
+    </form>
+  </section>
+
+  <!-- ── right rail ───────────────────────────────────────────────────── -->
+  <aside class="panel rail">
+    <div class="tabs" role="tablist">
+      <button class="tab sel" data-tab="activity" role="tab">Activity</button>
+      <button class="tab" data-tab="tasks" role="tab">Tasks</button>
+      <button class="tab" data-tab="tools" role="tab">Tools</button>
+      <button class="tab" data-tab="system" role="tab">System</button>
+    </div>
+
+    <div class="tabpanel" data-panel="activity">
+      <div class="rail-head">
+        <span id="activityCount" class="dim">0 events</span>
+        <button id="clearActivity" class="ghost small">Clear</button>
+      </div>
+      <ul id="activityList" class="activity-list"></ul>
+    </div>
+
+    <div class="tabpanel" data-panel="tasks" hidden>
+      <div class="rail-head">
+        <span id="taskCounts" class="dim">—</span>
+        <button id="refreshTasks" class="ghost small">Refresh</button>
+      </div>
+      <ul id="taskList" class="task-list"></ul>
+    </div>
+
+    <div class="tabpanel" data-panel="tools" hidden>
+      <div class="rail-head"><span class="dim">Registered tools and their policy</span></div>
+      <ul id="toolList" class="tool-list"></ul>
+    </div>
+
+    <div class="tabpanel" data-panel="system" hidden>
+      <div class="rail-head"><span class="dim">Providers, models, permissions</span></div>
+      <div id="systemInfo" class="system-info"></div>
+    </div>
+  </aside>
+</main>
+
+<!-- ── confirmation dialog ────────────────────────────────────────────── -->
+<div id="confirmModal" class="modal" hidden>
+  <div class="modal-card">
+    <div class="modal-head">
+      <span id="confirmRisk" class="risk">MEDIUM</span>
+      <h3 id="confirmTitle">Confirm</h3>
+    </div>
+    <p id="confirmBody" class="modal-body"></p>
+    <pre id="confirmArgs" class="modal-args"></pre>
+    <p id="confirmIrreversible" class="warn" hidden>
+      This action cannot easily be undone.
+    </p>
+    <div class="modal-actions">
+      <button id="confirmDeny" class="ghost">Cancel</button>
+      <button id="confirmApprove" class="danger">Approve</button>
+    </div>
+  </div>
+</div>
+
+<script src="/assets/app.js"></script>
+</body>
+</html>
