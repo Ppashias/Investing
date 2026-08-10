@@ -210,21 +210,39 @@ class timed:
 
     Used by the pipeline and tool executor so every stage reports a duration
     without each one reimplementing the arithmetic.
+
+    :attr:`elapsed_ms` is readable *inside* the block — the error paths need a
+    duration before the block exits, and reading :attr:`duration_ms` there
+    would silently report zero.
     """
 
-    __slots__ = ("_start", "duration_ms")
+    __slots__ = ("_start", "_duration_ms")
 
     def __enter__(self) -> "timed":
         import time
 
         self._start = time.perf_counter()
-        self.duration_ms = 0.0
+        self._duration_ms: float | None = None
         return self
 
     def __exit__(self, *exc: object) -> None:
         import time
 
-        self.duration_ms = (time.perf_counter() - self._start) * 1000.0
+        self._duration_ms = (time.perf_counter() - self._start) * 1000.0
+
+    @property
+    def elapsed_ms(self) -> float:
+        """Time since entry, valid at any point."""
+        import time
+
+        if self._duration_ms is not None:
+            return self._duration_ms
+        return (time.perf_counter() - self._start) * 1000.0
+
+    @property
+    def duration_ms(self) -> float:
+        """Final duration. Equals :attr:`elapsed_ms` before the block exits."""
+        return self.elapsed_ms
 
 
 def iter_registered_secrets() -> Iterator[str]:  # pragma: no cover - test aid

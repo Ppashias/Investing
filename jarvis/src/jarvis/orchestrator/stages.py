@@ -1,0 +1,391 @@
+"""The concrete pipeline stages.
+
+One class per stage of the flow in the brief (§5). Each is small and testable
+in isolation; the pipeline supplies timing, activity recording, and error
+handling.
+
+The permission check does not appear here as a separate stage even though the
+brief lists it as one. It is enforced *inside* tool execution, in
+:class:`jarvis.tools.executor.ToolExecutor`, because that is the only place
+that can guarantee it: a stage that checked permissions up front would be
+checking a plan, while the executor checks the actual call with its actual
+arguments, and cannot be bypassed.
+"""
+
+from __future__ import annotations
+
+import re
+from typing import Any
+
+from jarvis.activity.service import ActivityService
+from jarvis.context.manager import ContextManager
+from jarvis.conversations.service import ConversationService
+from jarvis.db.models import ActivityKind, MessageRole
+from jarvis.errors import (
+    ConfirmationRequiredError,
+    ProviderRefusalError,
+    ValidationError,
+)
+from jarvis.logging import get_logger
+from jarvis.orchestrator.pipeline import PipelineContext, Stage
+from jarvis.prompts.builder import SystemPromptBuilder
+from jarvis.providers.base import (
+    ChatMessage,
+    CompletionRequest,
+    TextBlock,
+    ToolResultBlock,
+    ToolUseBlock,
+)
+from jarvis.providers.retry import RetryPolicy
+from jarvis.providers.router import ModelRouter, TaskClass
+from jarvis.tools.base import ToolContext
+from jarvis.tools.executor import ToolCall, ToolExecutor
+from jarvis.tools.registry import ToolRegistry
+
+log = get_logger(__name__)
+
+MAX_MESSAGE_CHARS = 100_000
+
+
+class ValidateRequestStage(Stage):
+    name = "validate_request"
+
+    async def run(self, ctx: PipelineContext) -> None:
+        text = (ctx.message or "").strip()
+        if not text:
+            raise ValidationError(
+                "Empty message",
+                user_message="You sent an empty message — what would you like?",
+            )
+        if len(text) > MAX_MESSAGE_CHARS:
+            raise ValidationError(
+                f"Message of {len(text)} chars exceeds {MAX_MESSAGE_CHARS}",
+                user_message=(
+                    "That message is too long for me to take in one piece. "
+                    "Split it up or point me at a file once I can read files."
+                ),
+            )
+        # Normalise line endings so stored content and hashes are stable.
+        ctx.message = text.replace("\r\n", "\n")
+
+
+class LoadContextStage(Stage):
+    """Creates or loads the conversation, then assembles context for it."""
+
+    name = "load_context"
+
+    def __init__(self, context_manager_factory: Any) -> None:
+        self._make_context_manager = context_manager_factory
+
+    async def run(self, ctx: PipelineContext) -> None:
+        conversations = ConversationService(ctx.session)
+        if ctx.conversation is None:
+            ctx.set_conversation(await conversations.create(user_id=ctx.user.id))
+        await conversations.maybe_autotitle(ctx.conversation, ctx.message)
+
+        manager: ContextManager = self._make_context_manager(ctx.session)
+        ctx.context_bundle = await manager.assemble(
+            user_id=ctx.user.id,
+            conversation_id=ctx.conversation_id,
+            project_id=ctx.project_id,
+            query=ctx.message,
+        )
+        ctx.provider_messages = conversations.to_provider_messages(
+            ctx.context_bundle.history
+        )
+
+
+class AnalyseIntentStage(Stage):
+    """Classifies the request to pick a task class and tool exposure.
+
+    Phase 1 uses heuristics rather than a classifier model call. That is a
+    deliberate trade: a routing call adds latency and cost to every single
+    turn, and the only decisions it currently informs are "which tier of model"
+    and "offer tools or not" — both cheap to get slightly wrong and easy to
+    correct. The seam is here for Phase 6 to replace with a real classifier.
+    """
+
+    name = "analyse_intent"
+
+    _REASONING_HINTS = re.compile(
+        r"\b(plan|design|architect|analyse|analyze|compare|evaluate|strategy|"
+        r"why|debug|refactor|trade-?offs?|decide|review)\b",
+        re.IGNORECASE,
+    )
+    _TRIVIAL = re.compile(
+        r"^\s*(hi|hey|hello|yo|thanks|thank you|ok|okay|got it|cheers|bye)\b[\s!.?]*$",
+        re.IGNORECASE,
+    )
+
+    async def run(self, ctx: PipelineContext) -> None:
+        text = ctx.message
+
+        if self._TRIVIAL.match(text):
+            ctx.task_class = TaskClass.FAST
+            ctx.needs_tools = False
+        elif self._REASONING_HINTS.search(text) or len(text) > 1500:
+            ctx.task_class = TaskClass.REASONING
+            ctx.needs_tools = True
+        else:
+            ctx.task_class = TaskClass.CONVERSATION
+            ctx.needs_tools = True
+
+        log.debug(
+            "intent_analysed",
+            request_id=ctx.request_id,
+            task_class=ctx.task_class.value,
+            needs_tools=ctx.needs_tools,
+        )
+
+
+class PlanStage(Stage):
+    """Selects provider/model and the tool set for this turn."""
+
+    name = "plan"
+
+    def __init__(self, router: ModelRouter, registry: ToolRegistry) -> None:
+        self.router = router
+        self.registry = registry
+
+    async def run(self, ctx: PipelineContext) -> None:
+        available = self.registry.enabled() if ctx.needs_tools else []
+        ctx.available_tools = [t.name for t in available]
+
+        ctx.routing = self.router.select(
+            ctx.task_class,
+            needs_tools=bool(available),
+            needs_streaming=ctx.stream,
+            provider_override=ctx.provider_override,
+            model_override=ctx.model_override,
+        )
+
+        ctx.system_prompt = SystemPromptBuilder().build(ctx.context_bundle)
+
+        log.info(
+            "plan_selected",
+            request_id=ctx.request_id,
+            provider=ctx.routing.provider.key,
+            model=ctx.routing.model,
+            tools=len(ctx.available_tools),
+        )
+
+
+class ExecuteStage(Stage):
+    """The agent loop: call the model, run any tools it asks for, repeat.
+
+    Bounded by ``max_iterations`` so a model that keeps calling tools cannot
+    loop forever. Hitting the bound is reported rather than hidden.
+    """
+
+    name = "execute"
+
+    def __init__(
+        self,
+        *,
+        registry: ToolRegistry,
+        executor_factory: Any,
+        activity: ActivityService,
+        retry: RetryPolicy,
+        max_iterations: int = 8,
+    ) -> None:
+        self.registry = registry
+        self._make_executor = executor_factory
+        self.activity = activity
+        self.retry = retry
+        self.max_iterations = max_iterations
+
+    async def run(self, ctx: PipelineContext) -> None:
+        assert ctx.routing is not None
+        provider = ctx.routing.provider
+        system_text = ctx.system_prompt.render() if ctx.system_prompt else None
+        tool_specs = self.registry.provider_specs(ctx.available_tools or None)
+
+        messages = [*ctx.provider_messages, ChatMessage.user_text(ctx.message)]
+        executor: ToolExecutor = self._make_executor(ctx.session)
+
+        for iteration in range(1, self.max_iterations + 1):
+            ctx.iterations = iteration
+
+            request = CompletionRequest(
+                messages=messages,
+                system=system_text,
+                model=ctx.routing.model,
+                tools=tool_specs,
+                max_tokens=4096,
+                request_id=ctx.request_id,
+            )
+
+            try:
+                completion = await self.retry.run(
+                    lambda: provider.complete(request),
+                    description=f"{provider.key}.complete",
+                )
+            except ProviderRefusalError as exc:
+                ctx.final_text = exc.user_message
+                ctx.add_warning("provider_refused")
+                return
+
+            ctx.completion = completion
+            ctx.usage = ctx.usage + completion.usage
+
+            await self.activity.record(
+                ActivityKind.MODEL_CALL,
+                summary=f"{completion.model} → {completion.stop_reason}",
+                actor="orchestrator",
+                detail={
+                    "iteration": iteration,
+                    "input_tokens": completion.usage.input_tokens,
+                    "output_tokens": completion.usage.output_tokens,
+                    "cost_micros": completion.usage.cost_micros,
+                },
+                request_id=ctx.request_id,
+                conversation_id=ctx.conversation_id,
+                provider=completion.provider,
+                model=completion.model,
+                status=completion.stop_reason,
+                duration_ms=completion.latency_ms,
+            )
+
+            tool_uses = completion.tool_uses()
+            if not tool_uses:
+                ctx.final_text = completion.text()
+                return
+
+            # Persist the assistant turn *before* running tools, so a
+            # confirmation suspension leaves a coherent transcript.
+            await self._persist_assistant_turn(ctx, completion)
+            messages.append(completion.to_message())
+
+            results = await self._run_tools(ctx, executor, tool_uses)
+            await self._persist_tool_results(ctx, results)
+            messages.append(ChatMessage(role="user", content=list(results)))
+
+        # Loop bound reached.
+        ctx.add_warning("max_iterations_reached")
+        ctx.final_text = (
+            ctx.completion.text()
+            if ctx.completion and ctx.completion.text()
+            else (
+                "I used the maximum number of tool steps for one turn without "
+                "finishing. Tell me to continue if you want me to keep going."
+            )
+        )
+
+    async def _run_tools(
+        self, ctx: PipelineContext, executor: ToolExecutor, tool_uses: list[ToolUseBlock]
+    ) -> list[ToolResultBlock]:
+        results: list[ToolResultBlock] = []
+        for use in tool_uses:
+            call = ToolCall(id=use.id, name=use.name, arguments=use.input)
+            tool_ctx = ToolContext(
+                user_id=ctx.user.id,
+                session=ctx.session,
+                request_id=ctx.request_id,
+                conversation_id=ctx.conversation_id,
+            )
+            try:
+                outcome = await executor.execute_safe(call, tool_ctx)
+            except ConfirmationRequiredError as exc:
+                ctx.pending_confirmation = {
+                    "confirmation_id": exc.confirmation_id,
+                    "tool": use.name,
+                    "arguments": use.input,
+                }
+                # Results gathered so far are persisted by the caller's
+                # handler; the turn stops here awaiting the user.
+                raise
+            ctx.tool_outcomes.append(outcome)
+            results.append(
+                ToolResultBlock(
+                    tool_use_id=use.id,
+                    content=outcome.result.content,
+                    is_error=outcome.result.is_error,
+                )
+            )
+        return results
+
+    @staticmethod
+    async def _persist_assistant_turn(ctx: PipelineContext, completion: Any) -> None:
+        conversations = ConversationService(ctx.session)
+        await conversations.add_message(
+            conversation_id=ctx.conversation_id,  # type: ignore[arg-type]
+            role=MessageRole.ASSISTANT,
+            content=completion.text(),
+            blocks=list(completion.content),
+            provider=completion.provider,
+            model=completion.model,
+            usage=completion.usage,
+            stop_reason=completion.stop_reason,
+            latency_ms=completion.latency_ms,
+            request_id=ctx.request_id,
+        )
+
+    @staticmethod
+    async def _persist_tool_results(
+        ctx: PipelineContext, results: list[ToolResultBlock]
+    ) -> None:
+        if not results:
+            return
+        conversations = ConversationService(ctx.session)
+        await conversations.add_message(
+            conversation_id=ctx.conversation_id,  # type: ignore[arg-type]
+            role=MessageRole.TOOL,
+            content="\n".join(r.content for r in results)[:8000],
+            blocks=list(results),
+            request_id=ctx.request_id,
+        )
+
+
+class ValidateResultStage(Stage):
+    """Catches empty or unusable output before it reaches the user."""
+
+    name = "validate_result"
+
+    async def run(self, ctx: PipelineContext) -> None:
+        if ctx.final_text and ctx.final_text.strip():
+            return
+        if ctx.completion and ctx.completion.stop_reason == "max_tokens":
+            ctx.final_text = (
+                "I ran out of output space mid-answer. Ask me to continue and "
+                "I will pick up where I stopped."
+            )
+            ctx.add_warning("truncated_output")
+            return
+        ctx.final_text = (
+            "I did not produce a usable answer. That is a fault on my side — "
+            "try rephrasing, and it will show up in the activity log."
+        )
+        ctx.add_warning("empty_completion")
+
+
+class PersistStage(Stage):
+    """Writes the final assistant turn.
+
+    Intermediate assistant turns (the ones that requested tools) were already
+    persisted inside the execute stage, so this only writes the closing message
+    — and only when the last completion was not itself already stored.
+    """
+
+    name = "persist"
+
+    async def run(self, ctx: PipelineContext) -> None:
+        if ctx.conversation_id is None:
+            return
+        conversations = ConversationService(ctx.session)
+        already_persisted = bool(ctx.completion and ctx.completion.tool_uses())
+        if already_persisted:
+            return
+
+        await conversations.add_message(
+            conversation_id=ctx.conversation_id,
+            role=MessageRole.ASSISTANT,
+            content=ctx.final_text,
+            blocks=[TextBlock(text=ctx.final_text)],
+            provider=ctx.completion.provider if ctx.completion else None,
+            model=ctx.completion.model if ctx.completion else None,
+            usage=ctx.completion.usage if ctx.completion else None,
+            stop_reason=ctx.completion.stop_reason if ctx.completion else None,
+            latency_ms=ctx.completion.latency_ms if ctx.completion else None,
+            request_id=ctx.request_id,
+            meta={"warnings": ctx.warnings} if ctx.warnings else {},
+        )
