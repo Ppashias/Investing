@@ -939,3 +939,42 @@ async def test_the_api_path_still_asks_because_nothing_asked_for_it(
         with pytest.raises(ConfirmationRequiredError):
             await service.guard("create", target="Notes/Asked.md", actor="user")
         await session.commit()
+
+
+async def test_a_broad_grant_cannot_make_an_agent_vault_write_silent(
+    core, vault: Path
+) -> None:
+    """The strengthening this pass produced, stated without the taint crutch.
+
+    Before ``requires_confirmation=True`` was declared on the write tools, a
+    WRITE ALLOW grant scoped to ``tool:*`` satisfied both the executor's
+    permission decision and ObsidianService.guard, and a note appeared in the
+    user's vault with nobody asked. The tool-level flag is a floor the
+    executor honours whatever the grants say, so the grant below — deliberately
+    the broadest one expressible, on an untainted turn — still cannot produce a
+    file.
+    """
+    from jarvis.db.models import Capability, PermissionGrant
+
+    await _connect(core, vault, writes=True)
+
+    async with core.database.session_factory() as session:
+        user = await JarvisCore.ensure_default_user(session)
+        session.add(
+            PermissionGrant(
+                user_id=user.id,
+                capability=Capability.WRITE,
+                resource_scope="tool:*",
+                mode=PermissionMode.ALLOW,
+                note="Deliberately over-broad.",
+            )
+        )
+        await session.commit()
+
+    with pytest.raises(ConfirmationRequiredError):
+        await _execute(
+            core, "create_obsidian_note",
+            {"title": "Silent", "content": "x", "path": "Notes/Silent.md"},
+        )
+
+    assert not (vault / "Notes" / "Silent.md").exists()
