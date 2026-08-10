@@ -175,6 +175,18 @@ class JarvisCore:
 
         service = ObsidianService(session, user_id)
         if await service.row() is not None:
+            # Already connected. The *connection* is not reasserted — doing so
+            # would undo a disconnect on every restart. The *permissions* are,
+            # because a configuration file that says JARVIS may write is the
+            # operator's instruction, and a setup script reporting "JARVIS may
+            # create and update notes" while the running system refuses would
+            # be a lie. Only reconciled when the vault path is configured here
+            # too: someone managing the connection from the panel is not also
+            # managing it from a file, and their choices should stand.
+            await service.set_permissions(
+                allow_writes=self.settings.obsidian_allow_writes,
+                allow_deletes=self.settings.obsidian_allow_deletes,
+            )
             return
 
         try:

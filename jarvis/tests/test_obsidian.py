@@ -1174,3 +1174,51 @@ async def test_kill_process_tree_stops_a_running_process() -> None:
     finally:
         if process.poll() is None:
             process.kill()
+
+
+async def test_bootstrap_reconciles_permissions_on_an_existing_connection(
+    session, core, user, vault: Path
+) -> None:
+    """The gap a real setup run exposed.
+
+    Passing -AllowWrites wrote JARVIS_OBSIDIAN_ALLOW_WRITES=true and the script
+    reported "JARVIS may create and update notes" — but the vault was already
+    connected, bootstrap returned early, and the stored record still said no.
+    The script's message would have been false.
+    """
+    core.settings.obsidian_vault_path = vault
+    core.settings.obsidian_allow_writes = False
+    core.settings.obsidian_allow_deletes = False
+    await core._bootstrap_obsidian(session, user.id)
+
+    service = ObsidianService(session, user.id)
+    assert (await service.config()).allow_writes is False
+
+    core.settings.obsidian_allow_writes = True
+    core.settings.obsidian_allow_deletes = True
+    await core._bootstrap_obsidian(session, user.id)
+
+    config = await service.config()
+    assert config.allow_writes is True
+    assert config.allow_deletes is True
+    # And the connection itself is untouched — same vault, still enabled.
+    assert config.enabled is True
+    assert config.vault_name == vault.name
+
+
+async def test_bootstrap_does_not_touch_a_panel_managed_connection(
+    session, core, user, vault: Path
+) -> None:
+    """No vault path in configuration means the panel is in charge.
+
+    Reconciling flags from settings defaults would then quietly revoke a
+    permission the user granted in the UI on every restart.
+    """
+    service = ObsidianService(session, user.id)
+    await service.connect(str(vault), allow_writes=True, allow_deletes=True)
+
+    core.settings.obsidian_vault_path = None
+    core.settings.obsidian_allow_writes = False
+    await core._bootstrap_obsidian(session, user.id)
+
+    assert (await service.config()).allow_writes is True

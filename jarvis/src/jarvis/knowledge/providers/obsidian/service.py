@@ -303,6 +303,35 @@ class ObsidianService:
         )
         return {"connected": False, "documents_removed": removed}
 
+    async def set_permissions(
+        self, *, allow_writes: bool | None = None, allow_deletes: bool | None = None
+    ) -> ObsidianConfig:
+        """Change what JARVIS may do to an already-connected vault.
+
+        Separate from :meth:`connect` because the connection and the
+        permissions are different decisions with different lifetimes — the
+        vault stays the same while "may JARVIS write to it" changes.
+        """
+        row = await self.row()
+        if row is None:
+            return await self.config()
+
+        config = dict(row.config or {})
+        if allow_writes is not None:
+            config["allow_writes"] = bool(allow_writes)
+        if allow_deletes is not None:
+            config["allow_deletes"] = bool(allow_deletes)
+        row.config = config
+        await self.session.flush()
+
+        log.info(
+            "obsidian_permissions_updated",
+            vault=row.name,
+            allow_writes=config.get("allow_writes"),
+            allow_deletes=config.get("allow_deletes"),
+        )
+        return await self.config()
+
     async def provider(self) -> ObsidianProvider | None:
         """The live provider, or ``None`` when no vault is configured.
 
