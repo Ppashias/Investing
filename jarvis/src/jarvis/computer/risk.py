@@ -239,9 +239,14 @@ def classify_risk(action: ComputerAction) -> RiskAssessment:
     irreversible = False
 
     if action.kind is ActionKind.EXECUTE_COMMAND:
+        # The classifier has read the actual command, so its verdict replaces
+        # the baseline rather than being maxed with it. The baseline exists for
+        # kinds whose content is never inspected; keeping it here would floor
+        # every command at HIGH and make `pwd` indistinguishable from `rm`,
+        # which would train the user to approve everything.
         assessment = classify_command(str(action.params.get("command", "")))
         return RiskAssessment(
-            risk=_max_risk(base, assessment.risk),
+            risk=assessment.risk,
             reason=assessment.reason,
             irreversible=assessment.irreversible,
         )

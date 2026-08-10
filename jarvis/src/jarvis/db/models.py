@@ -144,6 +144,9 @@ class ActivityKind(str, enum.Enum):
     TASK_CREATED = "TASK_CREATED"
     TASK_UPDATED = "TASK_UPDATED"
     MEMORY_CAPTURED = "MEMORY_CAPTURED"
+    COMPUTER_ACTION = "COMPUTER_ACTION"
+    COMPUTER_TASK = "COMPUTER_TASK"
+    EMERGENCY_STOP = "EMERGENCY_STOP"
     MEMORY_RETRIEVED = "MEMORY_RETRIEVED"
     KNOWLEDGE_INGESTED = "KNOWLEDGE_INGESTED"
     ERROR = "ERROR"
@@ -877,3 +880,111 @@ class DocumentChunk(Base):
     created_at: Mapped[datetime] = ts_column(default=utcnow)
 
     document: Mapped["Document"] = relationship(back_populates="chunks")
+
+
+# ── Phase 3: computer control ────────────────────────────────────────────────
+#
+# Two tables. ``computer_actions`` is the audit trail §25/§26 require: one row
+# per attempted action, written whatever the outcome — including denied and
+# aborted — because "what did JARVIS try to do?" matters as much as what it
+# managed to do. ``computer_tasks`` is §11's task model.
+#
+# The audit table is append-only by construction, not by policy: nothing in the
+# codebase updates a row after the executor writes it, no API route edits or
+# deletes one, and no tool is registered that could. §26 asks that the log be
+# "difficult for the agent itself to silently alter", and the enforcement is
+# that the capability does not exist rather than that permission is withheld.
+
+
+class ComputerAudit(Base):
+    """One attempted computer action. Append-only."""
+
+    __tablename__ = "computer_actions"
+    __table_args__ = (
+        Index("ix_computer_action_user_created", "user_id", "created_at"),
+        Index("ix_computer_action_task", "task_id", "sequence"),
+    )
+
+    id: Mapped[str] = mapped_column(String(64), primary_key=True,
+                                    default=lambda: new_id("act"))
+    user_id: Mapped[str] = mapped_column(ForeignKey("users.id"), index=True)
+    task_id: Mapped[str | None] = mapped_column(String(64), nullable=True, index=True)
+    request_id: Mapped[str | None] = mapped_column(String(64), nullable=True, index=True)
+    #: Position within a task, so a replay reads in order even when two actions
+    #: share a timestamp.
+    sequence: Mapped[int] = mapped_column(Integer, default=0)
+
+    kind: Mapped[str] = mapped_column(String(48), index=True)
+    scope: Mapped[str] = mapped_column(String(32), index=True)
+    #: Human-readable summary. Never contains typed text or file content — the
+    #: audit log is displayed and exported, and duplicating a password into it
+    #: would defeat the point of not storing one.
+    summary: Mapped[str] = mapped_column(String(1000), default="")
+    reason: Mapped[str | None] = mapped_column(Text, nullable=True)
+    #: Redacted parameters. Content fields are replaced with their length.
+    params: Mapped[dict[str, Any]] = mapped_column(JSON, default=dict)
+
+    risk: Mapped[str] = mapped_column(String(16), index=True)
+    decision: Mapped[str] = mapped_column(String(16))
+    decision_reason: Mapped[str | None] = mapped_column(Text, nullable=True)
+    applied_rules: Mapped[list[str]] = mapped_column(JSON, default=list)
+    confirmation_id: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    confirmed_by: Mapped[str | None] = mapped_column(String(64), nullable=True)
+
+    outcome: Mapped[str] = mapped_column(String(32), index=True)
+    detail: Mapped[str | None] = mapped_column(Text, nullable=True)
+    error: Mapped[str | None] = mapped_column(Text, nullable=True)
+    duration_ms: Mapped[float | None] = mapped_column(Float, nullable=True)
+
+    verification: Mapped[str] = mapped_column(String(24), default="UNVERIFIED")
+    verification_detail: Mapped[str | None] = mapped_column(Text, nullable=True)
+    #: Screenshot ids before and after — references, not images.
+    observation_before: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    observation_after: Mapped[str | None] = mapped_column(String(64), nullable=True)
+
+    tainted: Mapped[bool] = mapped_column(Boolean, default=False)
+    actor: Mapped[str] = mapped_column(String(64), default="agent")
+    created_at: Mapped[datetime] = ts_column(default=utcnow, index=True)
+
+
+class ComputerTask(Base):
+    """A multi-step computer objective (§11)."""
+
+    __tablename__ = "computer_tasks"
+    __table_args__ = (Index("ix_computer_task_user_status", "user_id", "status"),)
+
+    id: Mapped[str] = mapped_column(String(64), primary_key=True,
+                                    default=lambda: new_id("ctask"))
+    user_id: Mapped[str] = mapped_column(ForeignKey("users.id"), index=True)
+    conversation_id: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    project_id: Mapped[str | None] = mapped_column(
+        ForeignKey("projects.id"), nullable=True
+    )
+
+    description: Mapped[str] = mapped_column(String(1000))
+    objective: Mapped[str] = mapped_column(Text)
+    status: Mapped[str] = mapped_column(String(32), default="PENDING", index=True)
+    current_step: Mapped[str | None] = mapped_column(String(500), nullable=True)
+
+    #: Counters rather than embedded lists: the actions live in
+    #: ``computer_actions``, and duplicating them here would create a second
+    #: version of the audit trail that could disagree with the first.
+    step_count: Mapped[int] = mapped_column(Integer, default=0)
+    completed_actions: Mapped[int] = mapped_column(Integer, default=0)
+    failed_actions: Mapped[int] = mapped_column(Integer, default=0)
+    max_steps: Mapped[int] = mapped_column(Integer, default=25)
+
+    #: Why the task is waiting, when it is (§29).
+    waiting_reason: Mapped[str | None] = mapped_column(Text, nullable=True)
+    result: Mapped[str | None] = mapped_column(Text, nullable=True)
+    error: Mapped[str | None] = mapped_column(Text, nullable=True)
+    risk: Mapped[str] = mapped_column(String(16), default="LOW")
+    scopes: Mapped[list[str]] = mapped_column(JSON, default=list)
+    observations: Mapped[list[dict[str, Any]]] = mapped_column(JSON, default=list)
+
+    created_at: Mapped[datetime] = ts_column(default=utcnow, index=True)
+    updated_at: Mapped[datetime] = ts_column(default=utcnow, onupdate=utcnow)
+    started_at: Mapped[datetime | None] = ts_column(nullable=True)
+    finished_at: Mapped[datetime | None] = ts_column(nullable=True)
+    #: Wall-clock deadline for the whole task (§28).
+    deadline_at: Mapped[datetime | None] = ts_column(nullable=True)

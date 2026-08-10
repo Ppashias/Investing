@@ -261,6 +261,12 @@ class ComputerPolicyEngine:
         rules.extend(core.applied_rules)
         if core.mode is PermissionMode.DENY:
             return decide(PermissionMode.DENY, core.reason, "core_engine_deny")
+        if core.mode is PermissionMode.ASK:
+            # The core engine's ASK is as binding as its DENY. Dropping it
+            # would discard the rules Phase 1 already enforces — grant
+            # expiry, risk ceilings on a grant, and taint escalation — and
+            # this layer would silently become the only one that matters.
+            return decide(PermissionMode.ASK, core.reason, "core_engine_ask")
 
         # 7. HIGH always meets a human (§12, §14).
         if assessment.risk is ActionRisk.HIGH:
