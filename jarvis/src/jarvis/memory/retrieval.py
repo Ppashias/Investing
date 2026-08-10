@@ -301,14 +301,24 @@ class MemoryRetriever:
     def _keyword_overlap(memory: Memory, terms: set[str]) -> float:
         """Fraction of query terms present, with a bonus for the subject.
 
+        Matched against a tokenised bag rather than by substring. Substring
+        matching looks equivalent and is not: "use" is inside "user", so the
+        query "should I use PyAutoGUI" scored a false 0.5 against "The **use**r
+        prefers dark mode" and outranked the memory that actually mentioned
+        PyAutoGUI.
+
         Scoring against the query's terms rather than the memory's means a long
         memory is not penalised for containing words the query did not use.
         """
         if not terms:
             return 0.0
-        haystack = f"{memory.content} {memory.summary or ''} {memory.subject or ''} " \
-                   f"{' '.join(memory.tags)}".lower()
-        present = {t for t in terms if t in haystack}
+        haystack = set(
+            _WORD_RE.findall(
+                f"{memory.content} {memory.summary or ''} {memory.subject or ''} "
+                f"{' '.join(memory.tags)}".lower()
+            )
+        )
+        present = terms & haystack
         if not present:
             return 0.0
 

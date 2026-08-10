@@ -481,12 +481,17 @@ class MemoryService:
     def _filtered(self, user_id: str, f: MemoryFilter) -> Select[Any]:
         stmt = select(Memory).where(Memory.user_id == user_id)
 
-        stmt = stmt.where(
-            Memory.status.in_(f.statuses)
-            if f.statuses
-            # Tombstones are never listed; they hold no content.
-            else Memory.status != MemoryStatus.DELETED
-        )
+        if f.statuses:
+            stmt = stmt.where(Memory.status.in_(f.statuses))
+        else:
+            # Tombstones hold no content. Superseded rows are history: their
+            # replacement is active and already listed, and showing both would
+            # put two contradictory memories side by side as though equally
+            # current — the thing §16 exists to prevent. Both remain reachable
+            # by asking for them explicitly, and from a memory's own history.
+            stmt = stmt.where(
+                Memory.status.not_in([MemoryStatus.DELETED, MemoryStatus.SUPERSEDED])
+            )
         if f.types:
             stmt = stmt.where(Memory.type.in_(f.types))
         if f.sources:

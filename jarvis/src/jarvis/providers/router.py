@@ -102,6 +102,7 @@ class ModelRouter:
         *,
         needs_tools: bool = False,
         needs_streaming: bool = False,
+        needs_structured_output: bool = False,
         provider_override: str | None = None,
         model_override: str | None = None,
     ) -> RoutingDecision:
@@ -111,6 +112,12 @@ class ModelRouter:
             required.add(ProviderCapability.TOOL_USE)
         if needs_streaming:
             required.add(ProviderCapability.STREAMING)
+        if needs_structured_output:
+            # The memory evaluator asks for JSON against a schema. A provider
+            # that cannot honour one will return prose, which parses to
+            # nothing — better to route elsewhere than to silently capture no
+            # memories.
+            required.add(ProviderCapability.STRUCTURED_OUTPUT)
         required_fs = frozenset(required)
 
         # An explicit override still has to be able to do the work — silently

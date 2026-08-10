@@ -411,8 +411,10 @@ class KnowledgeService:
 def _keyword_score(chunk: DocumentChunk, terms: set[str]) -> float:
     if not terms:
         return 0.0
-    haystack = f"{chunk.content} {chunk.heading_path or ''}".lower()
-    present = {t for t in terms if t in haystack}
+    # Tokenised, not substring: "use" must not match "user". See the same
+    # reasoning in jarvis.memory.retrieval._keyword_overlap.
+    haystack = set(_WORD_RE.findall(f"{chunk.content} {chunk.heading_path or ''}".lower()))
+    present = terms & haystack
     if not present:
         return 0.0
     overlap = len(present) / len(terms)

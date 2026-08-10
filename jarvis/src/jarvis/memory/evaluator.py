@@ -252,7 +252,7 @@ class MemoryEvaluator:
             f"JARVIS replied:\n{assistant_message.strip()[:4000]}"
         )
         try:
-            routing = self.router.route(
+            routing = self.router.select(
                 TaskClass.FAST, needs_tools=False, needs_structured_output=True
             )
             result = await routing.provider.complete(
