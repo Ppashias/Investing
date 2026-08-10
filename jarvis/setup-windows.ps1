@@ -198,8 +198,25 @@ if ($VaultPath) {
 
 # Read it back through the application, so "the token is configured" is
 # something observed rather than assumed.
-$tokenVisible = & $venvPython -c "from jarvis.config import get_secret, reset_config_caches; reset_config_caches(); print('yes' if get_secret('JARVIS_API_TOKEN') else 'no')" 2>$null
-if ($tokenVisible -notmatch "yes") {
+#
+# Three details, each of which produced a false failure on the way here:
+#   * the log level is forced down, because structlog writes to *stdout* and
+#     its lines would otherwise be captured alongside the answer;
+#   * the captured output is joined into one string, because `-notmatch`
+#     against a PowerShell *array* filters it instead of returning a boolean,
+#     and a surviving element is truthy;
+#   * the answer is a distinctive sentinel rather than "yes", so it cannot be
+#     matched accidentally by unrelated output.
+$probe = @"
+from jarvis.logging import configure_logging
+configure_logging('CRITICAL')
+from jarvis.config import get_secret, reset_config_caches
+reset_config_caches()
+print('TOKEN_READBACK_OK' if get_secret('JARVIS_API_TOKEN') else 'TOKEN_READBACK_FAILED')
+"@
+$tokenVisible = (& $venvPython -c $probe 2>$null) -join "`n"
+
+if ($tokenVisible -notmatch "TOKEN_READBACK_OK") {
     Write-Fail "The API token was written to .env but JARVIS cannot read it back."
     Write-Host  "    Send me the output of:"
     Write-Host  "      Select-String -Path .env -Pattern JARVIS_API_TOKEN"
