@@ -76,6 +76,50 @@ class Settings(BaseSettings):
     provider_timeout_seconds: float = 120.0
     provider_max_retries: int = 3
 
+    # ── embeddings ───────────────────────────────────────────────────────────
+    #: Endpoint speaking the OpenAI ``/v1/embeddings`` format. Falls back to
+    #: ``openai_base_url``. With neither set, retrieval degrades to a local
+    #: lexical vectoriser — functional, but unable to match paraphrases, and
+    #: reported as such by ``/api/system/status``.
+    embedding_base_url: str | None = None
+    embedding_api_key_name: str = "EMBEDDING_API_KEY"
+    embedding_model: str = "text-embedding-3-small"
+    embedding_dim: int = 1536
+
+    # ── memory ───────────────────────────────────────────────────────────────
+    #: Memory retrieval is on by default; turning it off leaves the rest of the
+    #: system working, which is what makes it debuggable.
+    memory_enabled: bool = True
+    #: How many memories may reach the model in one request. The cap is the
+    #: point — §19 forbids injecting the whole store.
+    memory_max_injected: int = 8
+    memory_max_chars: int = 6_000
+    #: Cosine similarity below which a candidate is not worth considering.
+    memory_min_similarity: float = 0.25
+    #: Similarity at or above which two memories on the same subject are
+    #: treated as the same memory rather than two (§15).
+    memory_duplicate_threshold: float = 0.87
+    #: Importance below which nothing is stored without being asked for.
+    memory_autostore_min_importance: float = 0.45
+    #: ``ask`` proposes and waits (§14); ``auto`` stores directly; ``off``
+    #: stores only what the user explicitly asks to be remembered.
+    memory_capture_mode: Literal["ask", "auto", "off"] = "ask"
+    #: Lifetime of WORKING-scope memories attached to a task or session.
+    working_memory_ttl_seconds: int = 86_400
+
+    # ── knowledge ────────────────────────────────────────────────────────────
+    knowledge_enabled: bool = True
+    knowledge_max_injected: int = 6
+    knowledge_max_chars: int = 8_000
+    #: Ceiling on a single ingested file. Chunking a 500 MB log helps nobody.
+    ingest_max_bytes: int = 25 * 1024 * 1024
+    ingest_chunk_target_chars: int = 1_400
+    ingest_chunk_overlap_chars: int = 160
+    #: Directories that may be ingested from. Empty means "nothing", which is
+    #: the safe default: ingestion reads arbitrary files, so the allow-list is
+    #: the boundary that keeps it from reading ``~/.ssh``.
+    knowledge_roots: list[Path] = Field(default_factory=list)
+
     # ── API auth ─────────────────────────────────────────────────────────────
     #: When set, every non-health request must present this token. JARVIS binds
     #: to loopback, but loopback is shared with every other process on the
@@ -118,7 +162,24 @@ class Settings(BaseSettings):
             "auth_required": self.require_auth,
             "tool_timeout_seconds": self.tool_timeout_seconds,
             "max_agent_iterations": self.max_agent_iterations,
+            "memory": {
+                "enabled": self.memory_enabled,
+                "capture_mode": self.memory_capture_mode,
+                "max_injected": self.memory_max_injected,
+            },
+            "knowledge": {
+                "enabled": self.knowledge_enabled,
+                "max_injected": self.knowledge_max_injected,
+                "roots_configured": len(self.knowledge_roots),
+            },
         }
+
+    @field_validator("knowledge_roots", mode="after")
+    @classmethod
+    def _resolve_roots(cls, v: list[Path]) -> list[Path]:
+        """Resolved once, here, so path containment checks downstream compare
+        two absolute paths and cannot be defeated by ``..``."""
+        return [p.expanduser().resolve() for p in v]
 
 
 @lru_cache(maxsize=1)
