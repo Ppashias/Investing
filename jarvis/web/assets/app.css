@@ -12,6 +12,14 @@
 }
 
 *{margin:0;padding:0;box-sizing:border-box;-webkit-tap-highlight-color:transparent}
+
+/* The `hidden` attribute must beat every layout rule below. The UA stylesheet
+   defines [hidden]{display:none} at author-stylesheet-losing priority, so any
+   author rule setting `display` — .modal{display:flex}, .auth-gate{display:flex}
+   — silently wins and the element stays on screen with its `hidden` attribute
+   set. Every overlay in this page is display:flex, so without this line the
+   confirmation dialog and the auth gate are permanently visible. */
+[hidden]{display:none !important}
 html,body{height:100%}
 body{
   background:var(--bg); color:var(--text);
@@ -229,3 +237,64 @@ button:disabled{opacity:.45;cursor:not-allowed}
 ::-webkit-scrollbar-track{background:transparent}
 ::-webkit-scrollbar-thumb{background:#1e2633;border-radius:5px}
 ::-webkit-scrollbar-thumb:hover{background:#2c3a52}
+
+/* ── memory & knowledge rails ────────────────────────────────────────── */
+.rail-filters{display:flex;gap:6px;padding:8px 12px;border-bottom:1px solid var(--border)}
+.rail-filters input,.rail-filters select{
+  flex:1;min-width:0;background:var(--sunk);color:var(--text);
+  border:1px solid var(--border);border-radius:7px;padding:5px 8px;
+  font-family:inherit;font-size:11px;
+}
+.rail-filters input:focus,.rail-filters select:focus{outline:none;border-color:#2c4a6e}
+.rail-notice{
+  margin:8px 12px;padding:7px 9px;border-radius:7px;font-size:10.5px;line-height:1.6;
+  background:#241d05;border:1px solid #4a3a00;color:var(--gold);
+}
+
+.memory-list,.doc-list,.source-list{list-style:none}
+.memory-list li,.doc-list li,.source-list li{
+  padding:8px 12px;border-bottom:1px solid #161d29;font-size:11px;cursor:pointer;
+}
+.memory-list li:hover,.doc-list li:hover{background:#101725}
+.mem-top{display:flex;justify-content:space-between;gap:8px;align-items:baseline}
+.mem-text{color:var(--text);word-break:break-word;line-height:1.5}
+.mem-kind{font-size:8.5px;font-weight:700;letter-spacing:.5px;color:var(--dim);flex:0 0 auto}
+.mem-meta{color:var(--dim);font-size:9.5px;margin-top:3px;display:flex;gap:7px;flex-wrap:wrap}
+.band{font-weight:700;letter-spacing:.4px}
+.band.CERTAIN,.band.CRITICAL{color:var(--green)}
+.band.HIGH{color:var(--accent)}
+.band.MEDIUM,.band.NORMAL{color:var(--muted)}
+.band.LOW,.band.TRIVIAL{color:var(--dim)}
+.mem-flag{color:var(--gold)}
+.st-PROPOSED{color:var(--gold)} .st-ARCHIVED{color:var(--dim)}
+.st-SUPERSEDED{color:var(--dim)} .st-ACTIVE{color:var(--green)}
+.mem-actions{display:flex;gap:5px;margin-top:5px}
+
+.doc-title{color:var(--text);font-weight:600;word-break:break-word}
+.doc-meta{color:var(--dim);font-size:9.5px;margin-top:2px}
+.doc-status{font-size:8.5px;font-weight:700;letter-spacing:.5px;flex:0 0 auto}
+.ds-INDEXED{color:var(--green)} .ds-FAILED{color:var(--red)}
+.ds-REGISTERED,.ds-EXTRACTING,.ds-CHUNKING,.ds-EMBEDDING{color:var(--gold)}
+
+.source-list li{cursor:default}
+.src-row{display:flex;justify-content:space-between;gap:8px;align-items:baseline}
+.src-name{color:var(--text)}
+.src-state{font-size:8.5px;font-weight:700;letter-spacing:.5px}
+.src-state.on{color:var(--green)} .src-state.off{color:var(--dim)}
+.src-detail{color:var(--dim);font-size:9.5px;margin-top:2px;line-height:1.5}
+
+/* ── memory modal ────────────────────────────────────────────────────── */
+.memory-card{border-color:var(--border);max-width:560px}
+.mem-edit{
+  width:100%;background:var(--sunk);color:var(--text);border:1px solid var(--border);
+  border-radius:8px;padding:9px 11px;font-family:inherit;font-size:12px;
+  line-height:1.6;resize:vertical;
+}
+.mem-edit:focus{outline:none;border-color:#2c4a6e}
+.mem-facts{display:flex;flex-wrap:wrap;gap:10px;margin:10px 0;font-size:10.5px;color:var(--dim)}
+.mem-facts b{color:var(--muted);font-weight:600}
+.mem-history{margin-top:8px;font-size:10.5px;color:var(--dim)}
+.mem-history summary{cursor:pointer;color:var(--muted)}
+.mem-history-list{list-style:none;margin-top:6px;max-height:150px;overflow-y:auto}
+.mem-history-list li{padding:3px 0;border-bottom:1px solid #161d29;line-height:1.5}
+.modal-actions .spacer{flex:1}

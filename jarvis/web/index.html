@@ -66,6 +66,8 @@
   <aside class="panel rail">
     <div class="tabs" role="tablist">
       <button class="tab sel" data-tab="activity" role="tab">Activity</button>
+      <button class="tab" data-tab="memory" role="tab">Memory</button>
+      <button class="tab" data-tab="knowledge" role="tab">Knowledge</button>
       <button class="tab" data-tab="tasks" role="tab">Tasks</button>
       <button class="tab" data-tab="tools" role="tab">Tools</button>
       <button class="tab" data-tab="system" role="tab">System</button>
@@ -77,6 +79,33 @@
         <button id="clearActivity" class="ghost small">Clear</button>
       </div>
       <ul id="activityList" class="activity-list"></ul>
+    </div>
+
+    <div class="tabpanel" data-panel="memory" hidden>
+      <div class="rail-head">
+        <span id="memoryCounts" class="dim">—</span>
+        <button id="exportMemory" class="ghost small">Export</button>
+      </div>
+      <div class="rail-filters">
+        <input type="search" id="memorySearch" placeholder="Search memory…" autocomplete="off" spellcheck="false">
+        <select id="memoryType">
+          <option value="">All types</option>
+        </select>
+      </div>
+      <p id="memoryNotice" class="rail-notice" hidden></p>
+      <ul id="memoryList" class="memory-list"></ul>
+    </div>
+
+    <div class="tabpanel" data-panel="knowledge" hidden>
+      <div class="rail-head">
+        <span id="knowledgeCounts" class="dim">—</span>
+        <button id="uploadDoc" class="ghost small">Ingest file</button>
+      </div>
+      <input type="file" id="docFile" hidden>
+      <p id="knowledgeNotice" class="rail-notice" hidden></p>
+      <ul id="documentList" class="doc-list"></ul>
+      <div class="rail-head"><span class="dim">Knowledge sources</span></div>
+      <ul id="sourceList" class="source-list"></ul>
     </div>
 
     <div class="tabpanel" data-panel="tasks" hidden>
@@ -114,6 +143,29 @@
     <div class="modal-actions">
       <button id="confirmDeny" class="ghost">Cancel</button>
       <button id="confirmApprove" class="danger">Approve</button>
+    </div>
+  </div>
+</div>
+
+<!-- ── memory detail ──────────────────────────────────────────────────── -->
+<div id="memoryModal" class="modal" hidden>
+  <div class="modal-card memory-card">
+    <div class="modal-head">
+      <span id="memType" class="risk">TYPE</span>
+      <h3>Memory</h3>
+    </div>
+    <textarea id="memContent" rows="4" class="mem-edit"></textarea>
+    <div class="mem-facts" id="memFacts"></div>
+    <details class="mem-history">
+      <summary>History</summary>
+      <ul id="memHistory" class="mem-history-list"></ul>
+    </details>
+    <div class="modal-actions">
+      <button id="memDelete" class="danger small">Delete permanently</button>
+      <span class="spacer"></span>
+      <button id="memArchive" class="ghost">Archive</button>
+      <button id="memClose" class="ghost">Close</button>
+      <button id="memSave" class="primary">Save</button>
     </div>
   </div>
 </div>

@@ -38,6 +38,27 @@
     authGate: $("authGate"),
     tokenInput: $("tokenInput"),
     tokenSave: $("tokenSave"),
+    memoryList: $("memoryList"),
+    memoryCounts: $("memoryCounts"),
+    memorySearch: $("memorySearch"),
+    memoryType: $("memoryType"),
+    memoryNotice: $("memoryNotice"),
+    exportMemory: $("exportMemory"),
+    memoryModal: $("memoryModal"),
+    memType: $("memType"),
+    memContent: $("memContent"),
+    memFacts: $("memFacts"),
+    memHistory: $("memHistory"),
+    memSave: $("memSave"),
+    memArchive: $("memArchive"),
+    memDelete: $("memDelete"),
+    memClose: $("memClose"),
+    documentList: $("documentList"),
+    knowledgeCounts: $("knowledgeCounts"),
+    knowledgeNotice: $("knowledgeNotice"),
+    sourceList: $("sourceList"),
+    uploadDoc: $("uploadDoc"),
+    docFile: $("docFile"),
     authError: $("authError"),
     activityList: $("activityList"),
     activityCount: $("activityCount"),
@@ -317,6 +338,8 @@
       if (wanted === "tasks") refreshTasks();
       if (wanted === "tools") refreshTools();
       if (wanted === "system") refreshSystem();
+      if (wanted === "memory") refreshMemory();
+      if (wanted === "knowledge") refreshKnowledge();
     });
   });
 
@@ -546,6 +569,327 @@
     } catch (_) { /* ignore */ }
   }
 
+  /* ── memory ─────────────────────────────────────────────────────────── */
+
+  /* Every field shown here comes from the API. Confidence and importance are
+     rendered as bands rather than numbers because nobody reading their own
+     memory wants to interpret 0.63, and provenance is shown whenever the
+     record has it — "where did this come from" is the question that decides
+     whether to trust a memory. */
+
+  let memorySearchTimer = null;
+
+  function memoryQuery() {
+    const params = new URLSearchParams({ limit: "60" });
+    const q = el.memorySearch.value.trim();
+    if (q) params.set("q", q);
+    if (el.memoryType.value) params.set("type", el.memoryType.value);
+    return params.toString();
+  }
+
+  async function refreshMemory() {
+    try {
+      const data = await api("/memories?" + memoryQuery());
+      const stats = await api("/memories/stats");
+      el.memoryList.replaceChildren();
+
+      el.memoryCounts.textContent =
+        stats.total_active + " active · " + data.total + " shown";
+
+      if (!el.memoryType.options.length || el.memoryType.options.length === 1) {
+        Object.keys(stats.by_type).sort().forEach((type) => {
+          const opt = document.createElement("option");
+          opt.value = type;
+          opt.textContent = type.replace(/_/g, " ").toLowerCase();
+          el.memoryType.appendChild(opt);
+        });
+      }
+
+      /* Say plainly when retrieval is lexical. A user comparing results
+         against expectations deserves to know the search cannot match
+         paraphrases rather than concluding the memory is missing. */
+      if (!stats.semantic_search) {
+        el.memoryNotice.textContent =
+          "Search is lexical only — it matches wording, not meaning. Configure " +
+          "an embedding endpoint (JARVIS_EMBEDDING_BASE_URL) for semantic recall.";
+        el.memoryNotice.hidden = false;
+      } else {
+        el.memoryNotice.hidden = true;
+      }
+
+      if (!data.memories.length) {
+        el.memoryList.appendChild(node("li", "dim", "Nothing remembered yet."));
+        return;
+      }
+      data.memories.forEach((memory) => {
+        el.memoryList.appendChild(memoryRow(memory));
+      });
+    } catch (_) { /* rail failures must not disturb the conversation */ }
+  }
+
+  function memoryRow(memory) {
+    const li = node("li");
+    li.addEventListener("click", () => openMemory(memory.id));
+
+    const top = node("div", "mem-top");
+    top.appendChild(node("span", "mem-text", memory.summary || memory.content));
+    top.appendChild(node("span", "mem-kind", memory.type.replace(/_/g, " ")));
+    li.appendChild(top);
+
+    const meta = node("div", "mem-meta");
+    meta.appendChild(node("span", "band " + memory.confidence_band,
+      memory.confidence_band.toLowerCase()));
+    meta.appendChild(node("span", "band " + memory.importance_band,
+      memory.importance_band.toLowerCase()));
+    if (memory.status !== "ACTIVE") {
+      meta.appendChild(node("span", "st-" + memory.status, memory.status.toLowerCase()));
+    }
+    if (memory.pinned) meta.appendChild(node("span", "mem-flag", "pinned"));
+    if (memory.tainted) meta.appendChild(node("span", "mem-flag", "external"));
+    if (memory.provenance) meta.appendChild(node("span", null, memory.provenance));
+    if (memory.updated_at) meta.appendChild(node("span", null, memory.updated_at.slice(0, 10)));
+    li.appendChild(meta);
+
+    /* Proposed memories are the confirmation prompt from §14, inline where
+       the memory is rather than in a separate queue. */
+    if (memory.status === "PROPOSED") {
+      const actions = node("div", "mem-actions");
+      const yes = node("button", "primary small", "Remember");
+      const no = node("button", "ghost small", "Don't");
+      yes.addEventListener("click", (e) => { e.stopPropagation(); confirmMemory(memory.id, true); });
+      no.addEventListener("click", (e) => { e.stopPropagation(); confirmMemory(memory.id, false); });
+      actions.appendChild(yes);
+      actions.appendChild(no);
+      li.appendChild(actions);
+    }
+    return li;
+  }
+
+  async function confirmMemory(id, approved) {
+    try {
+      await api("/memories/" + encodeURIComponent(id) + "/confirm", {
+        method: "POST",
+        body: { approved },
+      });
+      refreshMemory();
+    } catch (err) {
+      addMessage("assistant", err.message, { error: true });
+    }
+  }
+
+  let openMemoryId = null;
+
+  async function openMemory(id) {
+    try {
+      const memory = await api("/memories/" + encodeURIComponent(id));
+      openMemoryId = id;
+      el.memType.textContent = memory.type.replace(/_/g, " ");
+      el.memContent.value = memory.content;
+
+      el.memFacts.replaceChildren();
+      const facts = [
+        ["confidence", memory.confidence_band.toLowerCase()],
+        ["importance", memory.importance_band.toLowerCase()],
+        ["status", memory.status.toLowerCase()],
+        ["source", (memory.source || "").toLowerCase()],
+        ["subject", memory.subject || "—"],
+        ["revision", String(memory.revision)],
+        ["recalled", memory.access_count + "×"],
+        ["created", (memory.created_at || "").slice(0, 10)],
+      ];
+      if (memory.provenance) facts.push(["from", memory.provenance]);
+      facts.forEach(([label, value]) => {
+        const span = node("span");
+        span.appendChild(node("b", null, label + ": "));
+        span.appendChild(document.createTextNode(value));
+        el.memFacts.appendChild(span);
+      });
+
+      el.memHistory.replaceChildren();
+      memory.history.forEach((entry) => {
+        const when = (entry.at || "").slice(0, 16).replace("T", " ");
+        el.memHistory.appendChild(
+          node("li", null, when + "  " + entry.kind.toLowerCase() +
+            " by " + entry.actor + (entry.note ? " — " + entry.note : ""))
+        );
+      });
+
+      el.memoryModal.hidden = false;
+    } catch (err) {
+      addMessage("assistant", err.message, { error: true });
+    }
+  }
+
+  function closeMemory() {
+    el.memoryModal.hidden = true;
+    openMemoryId = null;
+  }
+
+  el.memClose.addEventListener("click", closeMemory);
+
+  el.memSave.addEventListener("click", async () => {
+    if (!openMemoryId) return;
+    try {
+      await api("/memories/" + encodeURIComponent(openMemoryId), {
+        method: "PATCH",
+        body: { content: el.memContent.value.trim() },
+      });
+      closeMemory();
+      refreshMemory();
+    } catch (err) {
+      addMessage("assistant", err.message, { error: true });
+    }
+  });
+
+  el.memArchive.addEventListener("click", async () => {
+    if (!openMemoryId) return;
+    try {
+      await api("/memories/" + encodeURIComponent(openMemoryId) + "/archive",
+        { method: "POST" });
+      closeMemory();
+      refreshMemory();
+    } catch (err) {
+      addMessage("assistant", err.message, { error: true });
+    }
+  });
+
+  el.memDelete.addEventListener("click", async () => {
+    if (!openMemoryId) return;
+    /* Confirmed in the browser because it is the one irreversible action the
+       UI offers: archive is a click away and recoverable, this is not. */
+    if (!window.confirm("Delete this memory permanently? Archiving is reversible; this is not.")) return;
+    try {
+      await api("/memories/" + encodeURIComponent(openMemoryId), { method: "DELETE" });
+      closeMemory();
+      refreshMemory();
+    } catch (err) {
+      addMessage("assistant", err.message, { error: true });
+    }
+  });
+
+  el.memorySearch.addEventListener("input", () => {
+    window.clearTimeout(memorySearchTimer);
+    memorySearchTimer = window.setTimeout(refreshMemory, 220);
+  });
+  el.memoryType.addEventListener("change", refreshMemory);
+
+  el.exportMemory.addEventListener("click", async () => {
+    try {
+      const archive = await api("/memories/export/archive");
+      const blob = new Blob([JSON.stringify(archive, null, 2)],
+        { type: "application/json" });
+      const url = URL.createObjectURL(blob);
+      const link = document.createElement("a");
+      link.href = url;
+      link.download = "jarvis-memory.json";
+      link.click();
+      URL.revokeObjectURL(url);
+    } catch (err) {
+      addMessage("assistant", err.message, { error: true });
+    }
+  });
+
+  /* ── knowledge ──────────────────────────────────────────────────────── */
+
+  async function refreshKnowledge() {
+    try {
+      const data = await api("/knowledge/documents?limit=60");
+      const sources = await api("/knowledge/sources");
+
+      el.documentList.replaceChildren();
+      el.knowledgeCounts.textContent =
+        data.stats.documents + " docs · " + data.stats.chunks + " chunks · " +
+        data.stats.chunks_embedded + " embedded";
+
+      if (!sources.roots.length) {
+        el.knowledgeNotice.textContent =
+          "No directories are approved for ingestion. Set JARVIS_KNOWLEDGE_ROOTS " +
+          "to ingest from disk; uploads work regardless.";
+        el.knowledgeNotice.hidden = false;
+      } else {
+        el.knowledgeNotice.hidden = true;
+      }
+
+      if (!data.documents.length) {
+        el.documentList.appendChild(node("li", "dim", "No documents ingested."));
+      }
+      data.documents.forEach((doc) => {
+        const li = node("li");
+        const row = node("div", "src-row");
+        row.appendChild(node("span", "doc-title", doc.title));
+        row.appendChild(node("span", "doc-status ds-" + doc.status, doc.status));
+        li.appendChild(row);
+
+        const bits = [doc.chunk_count + " chunks"];
+        if (doc.media_type) bits.push(doc.media_type.split("/").pop());
+        if (doc.provenance) bits.push(doc.provenance);
+        if (doc.error) bits.push(doc.error);
+        li.appendChild(node("div", "doc-meta", bits.join(" · ")));
+        el.documentList.appendChild(li);
+      });
+
+      /* Sources render from capability flags, not from hard-coded names.
+         Obsidian shows as planned because the API says implemented:false —
+         the UI is not asserting anything the backend has not. */
+      el.sourceList.replaceChildren();
+      sources.sources.forEach((source) => {
+        const li = node("li");
+        const row = node("div", "src-row");
+        row.appendChild(node("span", "src-name", source.name));
+        const state = source.implemented
+          ? (source.connected ? "connected" : "not connected")
+          : "planned";
+        row.appendChild(node("span",
+          "src-state " + (source.connected ? "on" : "off"), state));
+        li.appendChild(row);
+        li.appendChild(node("div", "src-detail", source.detail));
+        el.sourceList.appendChild(li);
+      });
+
+      const unsupported = sources.formats.filter((f) => !f.available)
+        .map((f) => f.key);
+      const supported = sources.formats.filter((f) => f.available)
+        .map((f) => f.key);
+      const li = node("li");
+      li.appendChild(node("div", "src-detail",
+        "Readable: " + supported.join(", ") +
+        (unsupported.length ? " · Not supported: " + unsupported.join(", ") : "")));
+      el.sourceList.appendChild(li);
+    } catch (_) { /* ignore */ }
+  }
+
+  el.uploadDoc.addEventListener("click", () => el.docFile.click());
+
+  el.docFile.addEventListener("change", async () => {
+    const file = el.docFile.files && el.docFile.files[0];
+    if (!file) return;
+    const form = new FormData();
+    form.append("file", file);
+    try {
+      /* Not through api(): FormData must set its own multipart boundary, so
+         the JSON content-type that helper applies would corrupt the body. */
+      const headers = {};
+      if (state.token) headers.Authorization = "Bearer " + state.token;
+      const response = await fetch("/api" + "/knowledge/ingest/upload", {
+        method: "POST", headers, body: form,
+      });
+      const body = await response.json().catch(() => ({}));
+      if (!response.ok) {
+        throw new Error((body.error && body.error.message) || body.detail ||
+          "Ingestion failed");
+      }
+      addMessage("assistant",
+        "Ingested " + file.name + " — " + body.chunks + " chunks, " +
+        body.embedded + " embedded." +
+        (body.warnings && body.warnings.length ? "\n" + body.warnings.join("\n") : ""));
+      refreshKnowledge();
+    } catch (err) {
+      addMessage("assistant", err.message, { error: true });
+    } finally {
+      el.docFile.value = "";
+    }
+  });
+
   /* ── boot ───────────────────────────────────────────────────────────── */
 
   async function boot() {
@@ -566,6 +910,12 @@
           "Tasks, tools, permissions, and activity all work without it.",
           { error: true }
         );
+      }
+
+      if (status.embeddings && !status.embeddings.semantic) {
+        /* Not an error, so not an error message — but the user should not
+           have to discover from result quality that recall is lexical. */
+        console.info("JARVIS: " + status.embeddings.description);
       }
 
       const activity = await api("/activity?limit=50");
