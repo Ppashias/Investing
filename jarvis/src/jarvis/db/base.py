@@ -2,11 +2,14 @@
 
 from __future__ import annotations
 
+import enum
 import uuid
 from collections.abc import AsyncIterator
 from datetime import datetime, timezone
+from typing import Any, Generic, TypeVar
 
-from sqlalchemy import DateTime, MetaData, event
+from sqlalchemy import DateTime, MetaData, String, TypeDecorator, event
+from sqlalchemy.engine import Dialect
 from sqlalchemy.ext.asyncio import (
     AsyncEngine,
     AsyncSession,
@@ -44,6 +47,48 @@ def new_id(prefix: str) -> str:
     four different ID types through one request.
     """
     return f"{prefix}_{uuid.uuid4().hex[:24]}"
+
+
+E = TypeVar("E", bound=enum.Enum)
+
+
+class EnumType(TypeDecorator, Generic[E]):  # type: ignore[type-arg]
+    """Store a Python enum as its ``value`` string, load it back as the enum.
+
+    A plain ``String`` column does not round-trip: values written as enums come
+    back as ``str`` after a reload, so ``.value`` raises ``AttributeError`` at
+    some arbitrary later point. Storing the readable value (rather than
+    SQLAlchemy's native ``Enum``, which persists the *name* and creates a DB
+    constraint that fights migrations) keeps the database greppable while
+    guaranteeing the Python-side type.
+
+    Unknown values coming back from the database are returned as-is rather than
+    raising: a row written by a newer build must not make an older one
+    unbootable.
+    """
+
+    impl = String
+    cache_ok = True
+
+    def __init__(self, enum_class: type[E], length: int = 48) -> None:
+        self.enum_class = enum_class
+        super().__init__(length=length)
+
+    def process_bind_param(self, value: Any, dialect: Dialect) -> str | None:
+        if value is None:
+            return None
+        if isinstance(value, self.enum_class):
+            return str(value.value)
+        # Accept the raw value too, so callers passing a string still work.
+        return str(self.enum_class(value).value)
+
+    def process_result_value(self, value: Any, dialect: Dialect) -> Any:
+        if value is None:
+            return None
+        try:
+            return self.enum_class(value)
+        except ValueError:
+            return value
 
 
 def ts_column(**kwargs: object):

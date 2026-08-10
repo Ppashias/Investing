@@ -32,7 +32,7 @@ from sqlalchemy import (
 )
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
-from jarvis.db.base import Base, new_id, ts_column, utcnow
+from jarvis.db.base import Base, EnumType, new_id, ts_column, utcnow
 
 
 # ── enums ────────────────────────────────────────────────────────────────────
@@ -194,7 +194,7 @@ class Message(Base):
     #: Monotonic per conversation. Ordering by timestamp alone is unsafe when
     #: several messages are written inside one turn.
     sequence: Mapped[int] = mapped_column(Integer, default=0)
-    role: Mapped[MessageRole] = mapped_column(String(32))
+    role: Mapped[MessageRole] = mapped_column(EnumType(MessageRole))
     content: Mapped[str] = mapped_column(Text, default="")
     #: Structured content blocks (tool_use / tool_result / text) preserved
     #: verbatim so a turn can be replayed to a provider without lossy
@@ -234,10 +234,12 @@ class Task(Base):
 
     title: Mapped[str] = mapped_column(String(500))
     description: Mapped[str | None] = mapped_column(Text, nullable=True)
-    status: Mapped[TaskStatus] = mapped_column(String(32), default=TaskStatus.TODO,
-                                               index=True)
-    priority: Mapped[TaskPriority] = mapped_column(String(16),
-                                                   default=TaskPriority.NORMAL)
+    status: Mapped[TaskStatus] = mapped_column(
+        EnumType(TaskStatus), default=TaskStatus.TODO, index=True
+    )
+    priority: Mapped[TaskPriority] = mapped_column(
+        EnumType(TaskPriority), default=TaskPriority.NORMAL
+    )
     #: Free-form agent key. No FK — agents are code-defined and the set changes
     #: between releases; a dangling FK would block startup.
     assigned_agent: Mapped[str | None] = mapped_column(String(64), nullable=True,
@@ -304,7 +306,7 @@ class TaskExecution(Base):
     )
     attempt: Mapped[int] = mapped_column(Integer, default=1)
     status: Mapped[ExecutionStatus] = mapped_column(
-        String(32), default=ExecutionStatus.RUNNING, index=True
+        EnumType(ExecutionStatus), default=ExecutionStatus.RUNNING, index=True
     )
     trigger: Mapped[str] = mapped_column(String(64), default="manual")
     agent: Mapped[str | None] = mapped_column(String(64), nullable=True)
@@ -342,15 +344,19 @@ class ToolDefinition(Base):
     version: Mapped[str] = mapped_column(String(32), default="1")
     description: Mapped[str] = mapped_column(Text, default="")
     parameters_schema: Mapped[dict[str, Any]] = mapped_column(JSON, default=dict)
-    capability: Mapped[Capability] = mapped_column(String(32), default=Capability.READ)
-    risk_level: Mapped[RiskLevel] = mapped_column(String(16), default=RiskLevel.NONE)
+    capability: Mapped[Capability] = mapped_column(
+        EnumType(Capability), default=Capability.READ
+    )
+    risk_level: Mapped[RiskLevel] = mapped_column(
+        EnumType(RiskLevel), default=RiskLevel.NONE
+    )
     requires_confirmation: Mapped[bool] = mapped_column(Boolean, default=False)
     reversible: Mapped[bool] = mapped_column(Boolean, default=True)
     enabled: Mapped[bool] = mapped_column(Boolean, default=True)
     #: Operator override of the engine's computed decision. NULL means "no
     #: override" — the engine's own evaluation stands.
     mode_override: Mapped[PermissionMode | None] = mapped_column(
-        String(16), nullable=True
+        EnumType(PermissionMode), nullable=True
     )
     created_at: Mapped[datetime] = ts_column(default=utcnow)
     updated_at: Mapped[datetime] = ts_column(default=utcnow, onupdate=utcnow)
@@ -373,10 +379,10 @@ class ToolExecution(Base):
 
     arguments: Mapped[dict[str, Any]] = mapped_column(JSON, default=dict)
     status: Mapped[ExecutionStatus] = mapped_column(
-        String(32), default=ExecutionStatus.RUNNING, index=True
+        EnumType(ExecutionStatus), default=ExecutionStatus.RUNNING, index=True
     )
     permission_decision: Mapped[PermissionMode | None] = mapped_column(
-        String(16), nullable=True
+        EnumType(PermissionMode), nullable=True
     )
     confirmation_id: Mapped[str | None] = mapped_column(String(64), nullable=True)
 
@@ -414,11 +420,13 @@ class PermissionGrant(Base):
     user_id: Mapped[str] = mapped_column(
         ForeignKey("users.id", ondelete="CASCADE"), index=True
     )
-    capability: Mapped[Capability] = mapped_column(String(32))
+    capability: Mapped[Capability] = mapped_column(EnumType(Capability))
     #: Glob over the resource the capability applies to. ``*`` matches all.
     #: For tools the resource is ``tool:<name>``.
     resource_scope: Mapped[str] = mapped_column(String(500), default="*")
-    mode: Mapped[PermissionMode] = mapped_column(String(16), default=PermissionMode.ASK)
+    mode: Mapped[PermissionMode] = mapped_column(
+        EnumType(PermissionMode), default=PermissionMode.ASK
+    )
     #: Additional gates evaluated by the engine, e.g. ``{"max_risk": "MEDIUM"}``.
     conditions: Mapped[dict[str, Any]] = mapped_column(JSON, default=dict)
     note: Mapped[str | None] = mapped_column(Text, nullable=True)
@@ -452,11 +460,13 @@ class Confirmation(Base):
     #: What is being asked for, so the UI can render specifics and the executor
     #: can verify the approval matches the action actually performed.
     action: Mapped[dict[str, Any]] = mapped_column(JSON, default=dict)
-    risk_level: Mapped[RiskLevel] = mapped_column(String(16), default=RiskLevel.MEDIUM)
+    risk_level: Mapped[RiskLevel] = mapped_column(
+        EnumType(RiskLevel), default=RiskLevel.MEDIUM
+    )
     reversible: Mapped[bool] = mapped_column(Boolean, default=True)
 
     status: Mapped[ConfirmationStatus] = mapped_column(
-        String(16), default=ConfirmationStatus.PENDING, index=True
+        EnumType(ConfirmationStatus), default=ConfirmationStatus.PENDING, index=True
     )
     decided_by: Mapped[str | None] = mapped_column(String(64), nullable=True)
     decision_note: Mapped[str | None] = mapped_column(Text, nullable=True)
@@ -476,7 +486,7 @@ class ActivityLog(Base):
 
     id: Mapped[str] = mapped_column(String(64), primary_key=True,
                                     default=lambda: new_id("act"))
-    kind: Mapped[ActivityKind] = mapped_column(String(48), index=True)
+    kind: Mapped[ActivityKind] = mapped_column(EnumType(ActivityKind), index=True)
     #: Who caused it — ``user``, ``orchestrator``, ``tool:<name>``, ``agent:<key>``.
     actor: Mapped[str] = mapped_column(String(64), default="system")
     summary: Mapped[str] = mapped_column(String(1000), default="")
