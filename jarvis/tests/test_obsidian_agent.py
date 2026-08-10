@@ -816,3 +816,126 @@ def test_the_activity_log_has_no_user_column() -> None:
     from jarvis.db.models import ActivityLog
 
     assert "user_id" not in ActivityLog.__table__.columns
+
+
+# ── §9 security regression on what this pass changed ─────────────────────────
+#
+# ``confirmed_by_caller`` is the only thing in this hardening pass that
+# suppresses a question the system used to ask. Everything below exists to
+# prove it suppresses the question and nothing else.
+
+
+def test_only_confirmed_tools_may_suppress_the_question() -> None:
+    """The floor the suppression depends on, asserted rather than assumed.
+
+    ``confirmed_by_caller=True`` is safe because the executor has already
+    obtained the user's approval — which is true only because the tool
+    declares ``requires_confirmation``, a flag the executor honours whatever
+    the grants say. A tool that passed the flag without declaring it would be
+    a silent vault write, so the two must never come apart.
+    """
+    import inspect
+
+    from jarvis.tools.builtin import obsidian_tools
+    from jarvis.tools.registry import build_default_registry
+
+    source = inspect.getsource(obsidian_tools)
+    registry = build_default_registry()
+
+    suppressing = {
+        tool.name
+        for tool in registry.all()
+        if tool.category == "obsidian"
+        and "confirmed_by_caller=True"
+        in inspect.getsource(tool.handler)
+    }
+    assert suppressing == {"create_obsidian_note", "update_obsidian_note"}
+    for name in suppressing:
+        assert registry.get(name).requires_confirmation is True
+    assert source.count("confirmed_by_caller=True") == len(suppressing)
+
+
+async def test_a_caller_confirmation_does_not_survive_a_deny(
+    core, vault: Path
+) -> None:
+    """DENY is not a question, so there is nothing for an approval to answer.
+
+    With writes switched off the operator has said no. The user having
+    approved the tool call one layer up is a different fact about a different
+    question, and it must not be mistaken for permission.
+    """
+    await _connect(core, vault, writes=False)
+
+    async with core.database.session_factory() as session:
+        user = await JarvisCore.ensure_default_user(session)
+        service = ObsidianService(session, user.id)
+        with pytest.raises(PermissionDeniedError):
+            await service.guard(
+                "create", target="Notes/Nope.md", actor="agent",
+                confirmed_by_caller=True,
+            )
+        await session.commit()
+
+    assert not (vault / "Notes" / "Nope.md").exists()
+
+
+async def test_a_suppressed_question_still_leaves_an_audit_record(
+    core, vault: Path
+) -> None:
+    """Suppressing the prompt must not suppress the evidence.
+
+    "Who allowed this?" has to be answerable from the log alone, or the
+    suppression has quietly removed the only durable trace that a human was
+    involved at all.
+
+    Driven with ``tainted=True`` because that is the case where the answer is
+    load-bearing: taint escalates the decision to ASK precisely so a human
+    sees a write influenced by untrusted content. The human does see it — the
+    executor's prompt fires first — but the reason they were asked has to
+    reach the vault audit too, or the log records an approval without
+    recording what made it necessary.
+    """
+    await _connect(core, vault, writes=True)
+
+    async with core.database.session_factory() as session:
+        user = await JarvisCore.ensure_default_user(session)
+        await ObsidianService(
+            session, user.id, activity=core.orchestrator._activity(session)
+        ).guard(
+            "create", target="Notes/Audited.md", actor="agent",
+            tainted=True, confirmed_by_caller=True,
+        )
+        await session.commit()
+
+    async with core.database.session_factory() as session:
+        rows = (await session.execute(select(ActivityLog))).scalars().all()
+        approvals = [
+            r for r in rows
+            if r.status == "APPROVED" and (r.detail or {}).get("operation") == "create"
+        ]
+        assert len(approvals) == 1
+        assert "approved by the caller's confirmation" in approvals[0].summary
+        assert approvals[0].detail.get("rules")
+
+
+async def test_the_api_path_still_asks_because_nothing_asked_for_it(
+    core, vault: Path
+) -> None:
+    """The default is unchanged, which is what makes the flag a narrow opt-in.
+
+    ``guard`` without ``confirmed_by_caller`` must behave exactly as it did
+    before this pass — that is the whole API surface, and it never sets it.
+    """
+    await _connect(core, vault, writes=True)
+
+    async with core.database.session_factory() as session:
+        user = await JarvisCore.ensure_default_user(session)
+        service = ObsidianService(
+            session, user.id,
+            confirmations=__import__(
+                "jarvis.confirmations.service", fromlist=["ConfirmationService"]
+            ).ConfirmationService(session),
+        )
+        with pytest.raises(ConfirmationRequiredError):
+            await service.guard("create", target="Notes/Asked.md", actor="user")
+        await session.commit()

@@ -429,3 +429,68 @@ def test_the_prompt_does_not_disclaim_capabilities_that_exist() -> None:
     assert "Not built yet (Phase 3 onward)" not in text
     assert "obsidian_status" in text
     assert "computer_status" in text
+
+
+# ── the reorder must not have changed any outcome ────────────────────────────
+
+
+@pytest.mark.parametrize(
+    "kind,available",
+    [(ActionKind.CLICK, False), (ActionKind.EXECUTE_COMMAND, True)],
+    ids=["unavailable-action", "available-action"],
+)
+async def test_lockdown_still_wins_over_the_capability_check(
+    core, windows, kind, available
+) -> None:
+    """Moving the capability check earlier must not let it outrank a stop.
+
+    LOCKDOWN and the phase-forbidden scopes are checked before it and stay
+    that way: the operator saying "nothing at all" is a stronger statement
+    than the machine saying "not this". The parametrisation covers both sides
+    of the reorder — an action the machine cannot do, and one it can.
+    """
+    from jarvis.computer.policy import ComputerPolicy, ComputerPolicyEngine
+    from jarvis.computer.types import ComputerAction, ComputerMode
+    from jarvis.core import JarvisCore
+    from jarvis.db.models import PermissionMode
+
+    report = windows()
+    assert report.supports(kind) is available
+
+    async with core.database.session_factory() as session:
+        user = await JarvisCore.ensure_default_user(session)
+        decision = await ComputerPolicyEngine(
+            session,
+            capabilities=report,
+            policy=ComputerPolicy(mode=ComputerMode.LOCKDOWN),
+        ).evaluate(
+            ComputerAction(
+                kind=kind,
+                params={"command": "echo hello", "x": 1, "y": 1},
+                reason="anything",
+            ),
+            user_id=user.id,
+        )
+
+    assert decision.mode is PermissionMode.DENY
+    assert "LOCKDOWN" in decision.reason
+
+
+def test_no_action_kind_maps_to_a_forbidden_scope() -> None:
+    """Why there is no forbidden-scope ordering test above it.
+
+    ``PHASE3_FORBIDDEN_SCOPES`` covers FINANCIAL, COMMUNICATION and
+    SYSTEM_SETTINGS, and no ``ActionKind`` is mapped to any of them — the rule
+    is unreachable by construction rather than by configuration, which is the
+    stronger guarantee. It is kept as the check that catches the first action
+    kind added into one of those scopes, and this test records that it is
+    currently dead code on purpose.
+
+    It also means the capability check's move ahead of the *scope-enabled*
+    rule cannot have disturbed it: the forbidden-scope rule still runs first
+    and still matches nothing.
+    """
+    from jarvis.computer.policy import PHASE3_FORBIDDEN_SCOPES
+    from jarvis.computer.types import ACTION_SCOPE
+
+    assert not {ACTION_SCOPE[kind] for kind in ActionKind} & PHASE3_FORBIDDEN_SCOPES
