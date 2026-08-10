@@ -216,7 +216,15 @@ class ActionExecutor:
                     include_image=params.get("include_image", True),
                     window_id=params.get("window_id"),
                     max_edge=int(params.get("max_edge", 0)) or 1024,
-                    force_image=kind is ActionKind.SCREENSHOT,
+                    # A screenshot is always an explicit request for pixels.
+                    # An observation may also force them — the Computer
+                    # panel's "Observe now" button means "show me the screen",
+                    # and answering "it looks the same as last time" is not
+                    # what the user pressed the button for.
+                    force_image=(
+                        kind is ActionKind.SCREENSHOT
+                        or bool(params.get("force_image"))
+                    ),
                 ),
             )
             return observation.to_dict(include_image=True), observation.summarise()

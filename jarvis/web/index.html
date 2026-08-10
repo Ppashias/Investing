@@ -68,6 +68,7 @@
       <button class="tab sel" data-tab="activity" role="tab">Activity</button>
       <button class="tab" data-tab="memory" role="tab">Memory</button>
       <button class="tab" data-tab="knowledge" role="tab">Knowledge</button>
+      <button class="tab" data-tab="computer" role="tab">Computer</button>
       <button class="tab" data-tab="tasks" role="tab">Tasks</button>
       <button class="tab" data-tab="tools" role="tab">Tools</button>
       <button class="tab" data-tab="system" role="tab">System</button>
@@ -106,6 +107,61 @@
       <ul id="documentList" class="doc-list"></ul>
       <div class="rail-head"><span class="dim">Knowledge sources</span></div>
       <ul id="sourceList" class="source-list"></ul>
+    </div>
+
+    <div class="tabpanel" data-panel="computer" hidden>
+      <div class="rail-head">
+        <span id="computerState" class="dim">checking…</span>
+        <button id="refreshComputer" class="ghost small">Refresh</button>
+      </div>
+
+      <!-- The stop lives at the top of the panel and is always visible when
+           computer control is connected. §27 asks for a highly visible
+           control; burying it below a scroll would defeat that. -->
+      <div class="stop-bar">
+        <button id="stopBtn" class="danger stop-button">STOP JARVIS</button>
+        <p id="stopState" class="stop-state" hidden></p>
+      </div>
+
+      <p id="computerNotice" class="rail-notice" hidden></p>
+
+      <div class="comp-block">
+        <h4>Mode</h4>
+        <select id="computerMode">
+          <option value="LOCKDOWN">Lockdown — nothing</option>
+          <option value="SAFE">Safe — observe only</option>
+          <option value="ASSISTED">Assisted — low risk automatic</option>
+          <option value="AUTONOMOUS">Autonomous — medium risk automatic</option>
+        </select>
+      </div>
+
+      <div class="comp-block">
+        <h4>Scopes</h4>
+        <p class="comp-hint">
+          Enabled lets JARVIS ask. Auto lets it act without asking, still
+          within the mode and risk limits.
+        </p>
+        <ul id="scopeList" class="scope-list"></ul>
+      </div>
+
+      <div class="comp-block">
+        <h4>Current</h4>
+        <div id="computerCurrent" class="system-info"></div>
+      </div>
+
+      <div class="comp-block">
+        <h4>Screen</h4>
+        <button id="observeBtn" class="ghost small">Observe now</button>
+        <p class="comp-hint">
+          Pull-based on purpose — JARVIS does not record your screen.
+        </p>
+        <img id="screenPreview" class="screen-preview" alt="" hidden>
+      </div>
+
+      <div class="comp-block">
+        <h4>Recent actions</h4>
+        <ul id="auditList" class="audit-list"></ul>
+      </div>
     </div>
 
     <div class="tabpanel" data-panel="tasks" hidden>

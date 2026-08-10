@@ -133,10 +133,18 @@ button:disabled{opacity:.45;cursor:not-allowed}
 
 /* ── right rail ──────────────────────────────────────────────────────── */
 .rail{min-height:0}
-.tabs{display:flex;border-bottom:1px solid var(--border);flex:0 0 auto}
+/* Seven tabs no longer fit a 340px rail. Scroll rather than shrink: at
+   font-size 10 the labels stop being readable, and a tab nobody can read is
+   worse than one they have to scroll to. */
+.tabs{
+  display:flex;border-bottom:1px solid var(--border);flex:0 0 auto;
+  overflow-x:auto;scrollbar-width:none;
+}
+.tabs::-webkit-scrollbar{display:none}
 .tab{
-  flex:1;background:none;border:none;border-bottom:2px solid transparent;
-  padding:9px 4px;color:var(--dim);font-weight:600;font-size:11px;
+  flex:0 0 auto;background:none;border:none;border-bottom:2px solid transparent;
+  padding:9px 9px;color:var(--dim);font-weight:600;font-size:11px;
+  white-space:nowrap;
 }
 .tab.sel{color:var(--bright);border-bottom-color:var(--accent)}
 .tabpanel{flex:1;overflow-y:auto;min-height:0}
@@ -298,3 +306,55 @@ button:disabled{opacity:.45;cursor:not-allowed}
 .mem-history-list{list-style:none;margin-top:6px;max-height:150px;overflow-y:auto}
 .mem-history-list li{padding:3px 0;border-bottom:1px solid #161d29;line-height:1.5}
 .modal-actions .spacer{flex:1}
+
+/* ── computer panel ──────────────────────────────────────────────────── */
+.stop-bar{padding:10px 12px;border-bottom:1px solid var(--border);background:#170d0c}
+.stop-button{
+  width:100%;font-size:13px;font-weight:800;letter-spacing:1.4px;padding:11px;
+  background:#3d1512;border-color:#8c2f28;color:#ffd9d6;
+}
+.stop-button:hover{border-color:var(--red);background:#4d1a16}
+.stop-button.engaged{background:var(--red);color:#1a0806;border-color:var(--red)}
+.stop-state{font-size:10.5px;color:var(--red);margin-top:7px;line-height:1.6}
+
+.comp-block{padding:10px 12px;border-bottom:1px solid #161d29}
+.comp-block h4{
+  font-size:9.5px;letter-spacing:1px;color:var(--bright);font-weight:700;
+  margin-bottom:7px;text-transform:uppercase;
+}
+.comp-hint{font-size:10px;color:var(--dim);line-height:1.6;margin:5px 0}
+.comp-block select{
+  width:100%;background:var(--sunk);color:var(--text);border:1px solid var(--border);
+  border-radius:7px;padding:6px 8px;font-family:inherit;font-size:11px;
+}
+.comp-block select:focus{outline:none;border-color:#2c4a6e}
+
+.scope-list{list-style:none;margin-top:4px}
+.scope-list li{
+  display:flex;align-items:center;gap:8px;padding:4px 0;font-size:10.5px;
+}
+.scope-name{flex:1;color:var(--text)}
+.scope-list label{display:flex;align-items:center;gap:4px;color:var(--dim);cursor:pointer}
+.scope-list input[type=checkbox]{accent-color:var(--accent);cursor:pointer}
+.scope-list li.forbidden{opacity:.4}
+.scope-list li.forbidden .scope-name::after{
+  content:" — not in this phase";color:var(--dim);font-size:9.5px;
+}
+
+.screen-preview{
+  width:100%;margin-top:8px;border:1px solid var(--border);border-radius:7px;
+  display:block;
+}
+
+.audit-list{list-style:none;max-height:260px;overflow-y:auto}
+.audit-list li{padding:6px 0;border-bottom:1px solid #161d29;font-size:10.5px}
+.audit-top{display:flex;justify-content:space-between;gap:8px;align-items:baseline}
+.audit-kind{color:var(--text);font-weight:600}
+.audit-outcome{font-size:8.5px;font-weight:700;letter-spacing:.5px;flex:0 0 auto}
+.ao-SUCCEEDED{color:var(--green)} .ao-DENIED{color:var(--red)}
+.ao-FAILED{color:var(--red)} .ao-ABORTED{color:var(--gold)}
+.ao-AWAITING_CONFIRMATION{color:var(--gold)} .ao-UNAVAILABLE{color:var(--dim)}
+.ao-TIMED_OUT{color:var(--gold)}
+.audit-meta{color:var(--dim);font-size:9.5px;margin-top:2px;line-height:1.5}
+.risk-HIGH,.risk-PROHIBITED{color:var(--red);font-weight:700}
+.risk-MEDIUM{color:var(--gold)} .risk-LOW{color:var(--dim)}

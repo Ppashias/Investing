@@ -149,7 +149,13 @@ async def observe(
     """
     action = ComputerAction(
         kind=ActionKind.OBSERVE_SCREEN,
-        params={"include_image": include_image, "window_id": window_id},
+        params={
+            "include_image": include_image,
+            "window_id": window_id,
+            # Explicitly requested by a human, so never suppressed as
+            # unchanged.
+            "force_image": include_image,
+        },
         reason="Observation requested from the Computer panel",
     )
     result = await core.computer.execute_action(

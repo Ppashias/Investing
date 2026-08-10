@@ -59,6 +59,17 @@
     sourceList: $("sourceList"),
     uploadDoc: $("uploadDoc"),
     docFile: $("docFile"),
+    computerState: $("computerState"),
+    refreshComputer: $("refreshComputer"),
+    stopBtn: $("stopBtn"),
+    stopState: $("stopState"),
+    computerNotice: $("computerNotice"),
+    computerMode: $("computerMode"),
+    scopeList: $("scopeList"),
+    computerCurrent: $("computerCurrent"),
+    observeBtn: $("observeBtn"),
+    screenPreview: $("screenPreview"),
+    auditList: $("auditList"),
     authError: $("authError"),
     activityList: $("activityList"),
     activityCount: $("activityCount"),
@@ -340,6 +351,7 @@
       if (wanted === "system") refreshSystem();
       if (wanted === "memory") refreshMemory();
       if (wanted === "knowledge") refreshKnowledge();
+      if (wanted === "computer") refreshComputer();
     });
   });
 
@@ -890,6 +902,221 @@
     }
   });
 
+  /* ── computer ───────────────────────────────────────────────────────── */
+
+  /* Everything here renders from /api/computer/status. The panel asserts
+     nothing on its own: if the backend says a capability is unavailable, the
+     reason shown is the backend's, so the UI cannot drift into claiming
+     something works when it does not. */
+
+  let computerStatus = null;
+
+  async function refreshComputer() {
+    try {
+      const status = await api("/computer/status");
+      computerStatus = status;
+      renderStopState(status.emergency_stop);
+      renderComputerState(status);
+      renderScopes(status);
+      renderCurrent(status);
+      await refreshAudit();
+    } catch (_) { /* rail failures must not disturb the conversation */ }
+  }
+
+  function renderStopState(stop) {
+    el.stopBtn.textContent = stop.engaged ? "STOPPED — RESUME" : "STOP JARVIS";
+    el.stopBtn.classList.toggle("engaged", stop.engaged);
+    if (stop.engaged) {
+      el.stopState.textContent =
+        stop.reason + " · " + stop.blocked_count + " action(s) blocked since.";
+      el.stopState.hidden = false;
+    } else {
+      el.stopState.hidden = true;
+    }
+  }
+
+  function renderComputerState(status) {
+    const display = status.capabilities.display;
+    el.computerState.textContent = status.connected
+      ? display.kind + " " + display.width + "x" + display.height
+      : "not connected";
+
+    /* The notes come from capability detection, so the panel says exactly
+       what the backend found — including that a display is virtual. */
+    const notes = status.capabilities.notes || [];
+    if (!status.connected || notes.length) {
+      el.computerNotice.textContent = status.connected
+        ? notes.join(" ")
+        : "No display is available. " + notes.join(" ");
+      el.computerNotice.hidden = false;
+    } else {
+      el.computerNotice.hidden = true;
+    }
+    el.computerMode.value = status.policy.mode;
+  }
+
+  function renderScopes(status) {
+    const enabled = new Set(status.policy.enabled_scopes);
+    const auto = new Set(status.policy.auto_scopes);
+    const forbidden = new Set(status.policy.forbidden_scopes);
+    const all = status.policy.available_scopes.concat(status.policy.forbidden_scopes);
+
+    el.scopeList.replaceChildren();
+    all.sort().forEach((scope) => {
+      const li = node("li");
+      if (forbidden.has(scope)) li.className = "forbidden";
+      li.appendChild(node("span", "scope-name", scope.toLowerCase()));
+
+      ["enabled", "auto"].forEach((which) => {
+        const label = node("label");
+        const box = document.createElement("input");
+        box.type = "checkbox";
+        box.checked = which === "enabled" ? enabled.has(scope) : auto.has(scope);
+        box.disabled = forbidden.has(scope);
+        box.addEventListener("change", () => updateScope(scope, which, box.checked));
+        label.appendChild(box);
+        label.appendChild(document.createTextNode(which));
+        li.appendChild(label);
+      });
+      el.scopeList.appendChild(li);
+    });
+  }
+
+  async function updateScope(scope, which, on) {
+    if (!computerStatus) return;
+    const enabled = new Set(computerStatus.policy.enabled_scopes);
+    const auto = new Set(computerStatus.policy.auto_scopes);
+    const target = which === "enabled" ? enabled : auto;
+    if (on) target.add(scope); else target.delete(scope);
+    /* Mirrors the server rule rather than relying on the round trip, so the
+       checkbox does not flicker into an impossible state. */
+    if (which === "enabled" && !on) auto.delete(scope);
+
+    try {
+      await api("/computer/permissions", {
+        method: "PATCH",
+        body: { enabled_scopes: [...enabled], auto_scopes: [...auto] },
+      });
+      refreshComputer();
+    } catch (err) {
+      addMessage("assistant", err.message, { error: true });
+      refreshComputer();
+    }
+  }
+
+  el.computerMode.addEventListener("change", async () => {
+    try {
+      await api("/computer/permissions", {
+        method: "PATCH", body: { mode: el.computerMode.value },
+      });
+      refreshComputer();
+    } catch (err) {
+      addMessage("assistant", err.message, { error: true });
+    }
+  });
+
+  function renderCurrent(status) {
+    el.computerCurrent.replaceChildren();
+    const rows = [
+      ["backend", status.backend],
+      ["application", status.current_application || "—"],
+      ["window", status.active_window ? status.active_window.title : "—"],
+      ["task", status.active_task ? status.active_task.description : "—"],
+      ["step", status.active_task ? (status.active_task.current_step || "—") : "—"],
+      ["planner", status.reasoner_available ? "available" : "no model provider"],
+      ["file roots", String(status.filesystem.allowed_paths.length)],
+      ["screenshots held", String(status.screenshots.held)],
+    ];
+    rows.forEach(([key, value]) => {
+      const div = node("div", "kv");
+      div.appendChild(node("span", null, key));
+      div.appendChild(node("span", null, value));
+      el.computerCurrent.appendChild(div);
+    });
+  }
+
+  async function refreshAudit() {
+    try {
+      const data = await api("/computer/audit?limit=40");
+      el.auditList.replaceChildren();
+      if (!data.entries.length) {
+        el.auditList.appendChild(node("li", "dim", "Nothing yet."));
+        return;
+      }
+      data.entries.forEach((entry) => {
+        const li = node("li");
+        const top = node("div", "audit-top");
+        top.appendChild(node("span", "audit-kind", entry.kind));
+        top.appendChild(
+          node("span", "audit-outcome ao-" + entry.outcome, entry.outcome)
+        );
+        li.appendChild(top);
+
+        const bits = [];
+        bits.push((entry.at || "").slice(11, 19));
+        bits.push(entry.actor);
+        if (entry.reason) bits.push(entry.reason);
+        const meta = node("div", "audit-meta");
+        meta.appendChild(node("span", "risk-" + entry.risk, entry.risk + " "));
+        meta.appendChild(document.createTextNode(bits.join(" · ")));
+        li.appendChild(meta);
+
+        if (entry.verification && entry.verification !== "UNVERIFIED") {
+          li.appendChild(node("div", "audit-meta", "verify: " + entry.verification));
+        }
+        el.auditList.appendChild(li);
+      });
+    } catch (_) { /* ignore */ }
+  }
+
+  el.stopBtn.addEventListener("click", async () => {
+    const engaged = computerStatus && computerStatus.emergency_stop.engaged;
+    try {
+      /* Not through api(): the stop must not queue behind anything, and the
+         helper's error handling could swallow it. Direct fetch, minimal
+         path, no dependence on prior state. */
+      const headers = { "Content-Type": "application/json" };
+      if (state.token) headers.Authorization = "Bearer " + state.token;
+      const response = await fetch("/api/computer/" + (engaged ? "resume" : "stop"), {
+        method: "POST",
+        headers,
+        body: engaged ? null : JSON.stringify({ reason: "User pressed STOP" }),
+      });
+      const body = await response.json();
+      renderStopState(body);
+      addMessage(
+        "assistant",
+        engaged
+          ? "Emergency stop released. Computer actions can run again."
+          : "Emergency stop engaged. No computer actions will run until you release it.",
+        { error: !engaged }
+      );
+      refreshComputer();
+    } catch (err) {
+      addMessage("assistant", "Could not reach the stop endpoint: " + err.message,
+                 { error: true });
+    }
+  });
+
+  el.refreshComputer.addEventListener("click", refreshComputer);
+
+  el.observeBtn.addEventListener("click", async () => {
+    try {
+      const data = await api("/computer/observe?include_image=true");
+      const image = data.image;
+      if (image && image.base64) {
+        el.screenPreview.src = "data:image/png;base64," + image.base64;
+        el.screenPreview.hidden = false;
+      } else {
+        el.screenPreview.hidden = true;
+        addMessage("assistant", "Observed — the screen is unchanged since last time.");
+      }
+      refreshComputer();
+    } catch (err) {
+      addMessage("assistant", err.message, { error: true });
+    }
+  });
+
   /* ── boot ───────────────────────────────────────────────────────────── */
 
   async function boot() {
@@ -916,6 +1143,15 @@
         /* Not an error, so not an error message — but the user should not
            have to discover from result quality that recall is lexical. */
         console.info("JARVIS: " + status.embeddings.description);
+      }
+
+      if (status.computer && status.computer.emergency_stop) {
+        addMessage(
+          "assistant",
+          "The emergency stop is engaged from a previous session. No computer "
+          + "actions will run until you release it in the Computer tab.",
+          { error: true }
+        );
       }
 
       const activity = await api("/activity?limit=50");
