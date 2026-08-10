@@ -240,7 +240,21 @@ class ComputerPolicyEngine:
                 "lockdown",
             )
 
-        # 4. Scope not enabled by the user (§16).
+        # 4. Capability unavailable on this machine (§2, §3). Denied rather
+        #    than asked: no confirmation makes a missing display appear.
+        #
+        #    Ahead of the scope check on purpose, though both are DENY and the
+        #    outcome is identical either way. What differs is the sentence the
+        #    user reads. "Enable the mouse scope in the Computer panel" is a
+        #    remedy, and on a machine with no display backend it is a remedy
+        #    that cannot work — the user enables it and the action fails
+        #    anyway. "This machine cannot do this at all" is the more
+        #    fundamental fact and the one worth saying first.
+        unavailable = self.capabilities.reason_unavailable(action.kind)
+        if unavailable:
+            return decide(PermissionMode.DENY, unavailable, "capability_unavailable")
+
+        # 5. Scope not enabled by the user (§16).
         if scope not in self.policy.enabled_scopes:
             return decide(
                 PermissionMode.DENY,
@@ -248,12 +262,6 @@ class ComputerPolicyEngine:
                 "Computer panel to allow this.",
                 "scope_disabled",
             )
-
-        # 5. Capability unavailable on this machine (§2, §3). Denied rather
-        #    than asked: no confirmation makes a missing display appear.
-        unavailable = self.capabilities.reason_unavailable(action.kind)
-        if unavailable:
-            return decide(PermissionMode.DENY, unavailable, "capability_unavailable")
 
         # 6. The Phase 1 engine — grants, expiry, revocation, taint, and the
         #    irreversibility floor, all of which already work and are tested.

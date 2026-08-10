@@ -92,6 +92,19 @@ class CapabilityReport:
             ActionKind.WRITE_CLIPBOARD,
         }
         if kind in display_needed and not self.display:
+            if self.os_name in {"Windows", "Darwin"}:
+                # Not "headless", and emphatically not "install Xvfb". The
+                # machine has a screen; JARVIS has no backend for it, and Xvfb
+                # would not give it one — X11 automation of an X server does
+                # not reach a single Windows or macOS application. Naming a
+                # remedy that cannot work is how a user concludes their setup
+                # is broken rather than that the feature does not exist.
+                return (
+                    f"JARVIS has no {self.os_name} computer-control backend. "
+                    "Only X11 is implemented, and screen, mouse and keyboard "
+                    f"control of a {self.os_name} desktop is not available at "
+                    "all — this is a missing feature, not a misconfiguration."
+                )
             if self.can_create_virtual_display:
                 return (
                     "No display is attached. A virtual display can be started "
@@ -223,6 +236,35 @@ def detect(*, probe_display: str | None = None) -> CapabilityReport:
     wayland = os.environ.get("WAYLAND_DISPLAY")
     x_display = probe_display or os.environ.get("DISPLAY")
 
+    if report.os_name in {"Windows", "Darwin"}:
+        # Decided before anything is probed, and deliberately regardless of
+        # DISPLAY. Running an X server on Windows is ordinary — VcXsrv, X410,
+        # WSLg all set DISPLAY — and probing it would succeed: a real X server
+        # with XTEST, a width and a height. JARVIS would then report a physical
+        # display and working pointer input on a machine where it cannot click
+        # a single Windows window. The automation would be real and entirely
+        # beside the point.
+        #
+        # "Headless" would be a lie about a machine with a monitor in front of
+        # it. The screen is there; JARVIS has no backend for it. Saying so is
+        # the difference between a user thinking their setup is broken and
+        # knowing the feature is not built.
+        report.notes.append(
+            f"{report.os_name} desktop detected. JARVIS has no "
+            f"{report.os_name} computer-control backend — only X11 is "
+            "implemented — so screen, mouse and keyboard actions are "
+            "unavailable here. Everything else, including Obsidian, the "
+            "knowledge base and the terminal, works normally."
+        )
+        if x_display or wayland:
+            report.notes.append(
+                f"DISPLAY is set ({x_display or wayland}), but an X server on "
+                f"{report.os_name} is a separate display containing no "
+                f"{report.os_name} applications. Driving it would not touch "
+                "the user's desktop, so it is not reported as one."
+            )
+        return _finalise(report)
+
     if wayland and not x_display:
         report.display_kind = "wayland"
         report.notes.append(
@@ -233,20 +275,6 @@ def detect(*, probe_display: str | None = None) -> CapabilityReport:
         return _finalise(report)
 
     if not x_display:
-        if report.os_name in {"Windows", "Darwin"}:
-            # "Headless" would be a lie about a machine with a monitor in
-            # front of it. The screen is there; JARVIS has no backend for it.
-            # Saying so is the difference between a user thinking their setup
-            # is broken and knowing the feature is not built.
-            report.notes.append(
-                f"{report.os_name} desktop detected. JARVIS has no "
-                f"{report.os_name} computer-control backend — only X11 is "
-                "implemented — so screen, mouse and keyboard actions are "
-                "unavailable here. Everything else, including Obsidian, the "
-                "knowledge base and the terminal, works normally."
-            )
-            return _finalise(report)
-
         report.notes.append(
             "No DISPLAY. This machine is headless."
             + (

@@ -490,6 +490,37 @@ async def computer_status(*, ctx: ToolContext) -> ToolResult:
     return ToolResult.ok("\n".join(lines), **status)
 
 
+#: The action each tool performs, for deciding whether to offer it at all.
+#:
+#: A tool whose action this machine cannot perform is not advertised to the
+#: model — the registry already applies that rule to disabled tools, on the
+#: grounds that advertising something that will be refused wastes a turn.
+#: Here it prevents something worse than a wasted turn. Several of these tools
+#: declare ``requires_confirmation``, and the executor obtains that approval
+#: *before* the handler runs, so a machine with no display would ask the user
+#: to approve a click and only then tell them clicking is impossible. An
+#: approval collected for an action that was never going to happen teaches the
+#: user their approvals are ceremonial.
+#:
+#: This changes only what is offered. Nothing is weakened: the policy engine
+#: still denies the action on capability grounds for every other caller, and
+#: ``computer_status`` is deliberately absent from this map so the model can
+#: always ask why.
+TOOL_ACTIONS: dict[str, ActionKind] = {
+    "observe_screen": ActionKind.OBSERVE_SCREEN,
+    "list_windows": ActionKind.GET_WINDOWS,
+    "click": ActionKind.CLICK,
+    "scroll": ActionKind.SCROLL,
+    "type_text": ActionKind.TYPE_TEXT,
+    "press_key": ActionKind.PRESS_KEY,
+    "open_application": ActionKind.OPEN_APPLICATION,
+    "read_file": ActionKind.READ_FILE,
+    "write_file": ActionKind.WRITE_FILE,
+    "list_directory": ActionKind.LIST_DIRECTORY,
+    "run_command": ActionKind.EXECUTE_COMMAND,
+}
+
+
 TOOLS = [
     observe_screen,
     list_windows,

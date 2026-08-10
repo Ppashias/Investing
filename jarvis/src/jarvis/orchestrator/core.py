@@ -151,7 +151,7 @@ class Orchestrator:
                 ValidateRequestStage(),
                 LoadContextStage(self._make_context_manager),
                 AnalyseIntentStage(),
-                PlanStage(self.router, self.registry),
+                PlanStage(self.router, self.registry, self.computer),
                 ExecuteStage(
                     registry=self.registry,
                     executor_factory=self._make_executor,

@@ -38,7 +38,7 @@ from jarvis.providers.base import (
 )
 from jarvis.providers.retry import RetryPolicy
 from jarvis.providers.router import ModelRouter, TaskClass
-from jarvis.tools.base import ToolContext
+from jarvis.tools.base import Tool, ToolContext
 from jarvis.tools.executor import ToolCall, ToolExecutor
 from jarvis.tools.registry import ToolRegistry
 
@@ -143,12 +143,19 @@ class PlanStage(Stage):
 
     name = "plan"
 
-    def __init__(self, router: ModelRouter, registry: ToolRegistry) -> None:
+    def __init__(
+        self, router: ModelRouter, registry: ToolRegistry, computer: Any = None
+    ) -> None:
         self.router = router
         self.registry = registry
+        self.computer = computer
 
     async def run(self, ctx: PipelineContext) -> None:
-        available = self.registry.enabled() if ctx.needs_tools else []
+        available = [
+            tool
+            for tool in (self.registry.enabled() if ctx.needs_tools else [])
+            if self._runnable_here(tool)
+        ]
         ctx.available_tools = [t.name for t in available]
 
         ctx.routing = self.router.select(
@@ -168,6 +175,37 @@ class PlanStage(Stage):
             model=ctx.routing.model,
             tools=len(ctx.available_tools),
         )
+
+    def _runnable_here(self, tool: Tool) -> bool:
+        """Can this machine actually perform what the tool does?
+
+        Only computer tools have a machine-dependent answer, and only because
+        §3 probes the environment at startup instead of assuming it. Offering
+        ``click`` on a machine with no display backend is not a harmless
+        no-op. The capability check lives in ``ComputerPolicyEngine``, which
+        runs inside the handler; the executor's own permission decision runs
+        *before* the handler and returns ASK for an ungranted EXECUTE. So the
+        user was asked to approve a click, approved it, and only then learned
+        that clicking is impossible here. Approving something that was never
+        going to happen teaches someone their approvals are ceremonial.
+
+        Withholding the tool is the narrow fix. It changes what the model is
+        offered and nothing else — the policy engine still denies these
+        actions on capability grounds for every other caller, and
+        ``computer_status`` is never withheld, so "why can't you click?" is
+        always answerable.
+        """
+        if self.computer is None or tool.category != "computer":
+            return True
+
+        capabilities = getattr(self.computer, "capabilities", None)
+        if capabilities is None:
+            return True
+
+        from jarvis.tools.builtin.computer_tools import TOOL_ACTIONS
+
+        kind = TOOL_ACTIONS.get(tool.name)
+        return kind is None or capabilities.supports(kind)
 
 
 class ExecuteStage(Stage):
