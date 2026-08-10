@@ -20,20 +20,43 @@ plainly rather than pretending otherwise — see
 
 ## Quick start
 
+### macOS / Linux
+
 ```bash
 cd jarvis
 python3 -m venv .venv
 ./.venv/bin/pip install -e ".[dev]"
 
-# Configuration. Copy the example and fill in at least one key.
-cp .env.example ../.env
-$EDITOR ../.env
+# Configuration. `.env` lives beside the package, which is where config.py
+# reads it from — putting it at the repository root does nothing.
+cp .env.example .env
+$EDITOR .env
 
 # Create the schema.
 ./.venv/bin/alembic upgrade head
 
 # Run.
 ./.venv/bin/uvicorn jarvis.api.app:app --factory --host 127.0.0.1 --port 8787
+```
+
+### Windows
+
+```powershell
+cd jarvis
+.\setup-windows.ps1                                # once
+.\start-jarvis.ps1                                 # every time
+```
+
+`setup-windows.ps1` checks for Python 3.11+, creates the virtual environment,
+installs JARVIS, writes a `.env` with a generated API token, applies the
+migrations, and runs the tests. Pass `-VaultPath C:\Projects\Jarvis` to record
+your Obsidian vault at the same time.
+
+If PowerShell refuses to run the script, it is the execution policy rather than
+the script:
+
+```powershell
+Set-ExecutionPolicy -Scope Process -ExecutionPolicy Bypass
 ```
 
 Then open <http://127.0.0.1:8787>.

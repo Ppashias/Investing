@@ -201,6 +201,36 @@ The report includes a `searched` list, so "not found" is a checkable claim
 rather than an assertion: you can see whether your vault's location was even
 considered, and if it was not, the answer is to paste the path.
 
+### Running on Windows
+
+`setup-windows.ps1` and `start-jarvis.ps1` do the whole setup. Four things in
+the application needed fixing for Windows, and none of them was Obsidian code:
+
+* **`os.killpg` does not exist on Windows.** The terminal's timeout path and
+  `close_application` both called it inline, so a hung command raised
+  `AttributeError` from the handler instead of being killed. Both now go
+  through `terminal.kill_process_tree`, which uses `taskkill /T` on Windows —
+  the only way to reach grandchildren — and `killpg` on POSIX.
+* **The child environment lacked `SYSTEMROOT`.** It is required by the C
+  runtime and winsock; a process started without it fails to initialise, so
+  every command would have failed in a way that looks like JARVIS is broken
+  rather than misconfigured. The allow-list now carries the Windows essentials,
+  and the hard-coded `/usr/local/bin:/usr/bin:/bin` PATH fallback is
+  `os.defpath` there.
+* **The SQLite URL embedded backslashes.** `sqlite+aiosqlite:///C:\Users\…`
+  is at best undefined; the documented form is forward slashes, so the path is
+  rendered with `as_posix()`.
+* **Discovery only scanned under the home directory.** `C:\Projects\Jarvis`
+  is an ordinary place to keep a vault and is not under the user profile, so
+  the scan could never reach it. On Windows the fixed drive roots are added,
+  which the prune list and the depth limit keep cheap.
+
+One thing that is *not* fixed, deliberately: the terminal's command classifier
+knows Unix command names. `run_command` on Windows will classify `dir`, `type`
+and `findstr` as unknown and therefore `HIGH`, so they meet a confirmation
+rather than running silently. That is the safe direction to be wrong in, and
+`TERMINAL` is off by default, so it does not affect the Obsidian path at all.
+
 ## 9. What is not implemented
 
 - **Push-based automatic sync.** Pull is the only automatic direction. Writing back is explicit, permission-checked and audited. §23 forbids unrestricted bidirectional sync, and the reason is that it is how people lose hand-written notes.

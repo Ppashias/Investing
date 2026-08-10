@@ -509,8 +509,7 @@ class ActionExecutor:
         limit: the user's own editor with unsaved work is exactly the thing an
         agent should not be able to terminate.
         """
-        import signal
-        import os
+        from jarvis.computer.terminal import kill_process_tree
 
         process = self._launched.get(name)
         if process is None:
@@ -520,9 +519,11 @@ class ActionExecutor:
         if process.poll() is not None:
             return {"application": name, "already_exited": True}, f"{name} had exited."
 
-        try:
-            os.killpg(os.getpgid(process.pid), signal.SIGTERM)
-        except (ProcessLookupError, PermissionError):
+        # Shared with the terminal's timeout path so there is one definition of
+        # "kill this and its children" rather than two that disagree by
+        # platform. The previous inline os.killpg raised AttributeError on
+        # Windows, where that function does not exist.
+        if not kill_process_tree(process):
             process.terminate()
 
         for _ in range(20):

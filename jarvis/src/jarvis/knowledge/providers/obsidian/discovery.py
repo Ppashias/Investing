@@ -69,6 +69,36 @@ _SCAN_ROOTS = (
     "~/Library/Mobile Documents/iCloud~md~obsidian/Documents",
 )
 
+#: Windows-only additions, computed at scan time.
+#:
+#: A vault is not required to live under the home directory, and on Windows it
+#: frequently does not — ``C:\Projects\MyVault`` and ``D:\Notes`` are ordinary
+#: places to keep one. Every ``_SCAN_ROOTS`` entry is home-relative, so without
+#: this a vault outside the user profile is unreachable by scan no matter how
+#: deep it goes.
+#:
+#: Drive roots are cheap to walk given the prune list below: at depth 2 the
+#: work is a stat per directory in ``C:\`` and per directory one level under
+#: it, with Windows, Program Files and $Recycle.Bin skipped.
+def _platform_scan_roots() -> tuple[str, ...]:
+    if os.name != "nt":
+        return ()
+
+    import string
+
+    roots: list[str] = []
+    for letter in string.ascii_uppercase:
+        drive = f"{letter}:\\"
+        try:
+            if Path(drive).is_dir():
+                roots.append(drive)
+        except OSError:
+            # A mapped drive that is disconnected raises rather than
+            # returning False. It is not reachable, so it is not a root.
+            continue
+    return tuple(roots)
+
+
 #: How far below each scan root to look. Two levels, because the common layouts
 #: are ``~/Documents/MyVault`` (one) and ``~/Documents/Obsidian/MyVault`` (two)
 #: — people group their vaults in a folder. Three would start walking source
@@ -274,10 +304,12 @@ def _from_scan(searched: list[str] | None = None) -> list[DiscoveredVault]:
     one, which is worse than reporting nothing at all.
     """
     found: list[DiscoveredVault] = []
-    for template in _SCAN_ROOTS:
+    seen_roots: set[str] = set()
+    for template in (*_SCAN_ROOTS, *_platform_scan_roots()):
         root = Path(template).expanduser()
-        if not root.is_dir():
+        if not root.is_dir() or str(root) in seen_roots:
             continue
+        seen_roots.add(str(root))
         if searched is not None:
             searched.append(str(root))
 

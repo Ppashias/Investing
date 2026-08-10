@@ -187,7 +187,11 @@ class Settings(BaseSettings):
     def resolved_database_url(self) -> str:
         if self.database_url:
             return self.database_url
-        return f"sqlite+aiosqlite:///{self.data_dir / 'jarvis.db'}"
+        # ``as_posix()`` rather than ``str()``: on Windows the latter produces
+        # ``sqlite+aiosqlite:///C:\Users\...\jarvis.db``, and backslashes in a
+        # URL are at best undefined — SQLAlchemy's documented form for a
+        # Windows path is forward slashes. On POSIX the two are identical.
+        return f"sqlite+aiosqlite:///{(self.data_dir / 'jarvis.db').as_posix()}"
 
     def ensure_dirs(self) -> None:
         self.data_dir.mkdir(parents=True, exist_ok=True)

@@ -1060,3 +1060,117 @@ def test_discovery_never_returns_a_path_that_is_not_there(tmp_path: Path, monkey
     for vault in discovery.discover().vaults:
         assert Path(vault.path).is_dir()
         assert (Path(vault.path) / ".obsidian").is_dir()
+
+
+def test_discovery_reaches_a_vault_outside_the_home_directory(
+    tmp_path: Path, monkeypatch
+) -> None:
+    """The `C:\\Projects\\Jarvis` case.
+
+    Every ``_SCAN_ROOTS`` entry is home-relative, so a vault on a drive root is
+    unreachable by scan without the platform roots. Simulated here with a
+    stand-in drive directory, because a Linux test cannot create ``C:\\`` —
+    what it exercises is the traversal, which is the part that was missing.
+    """
+    from jarvis.knowledge.providers.obsidian import discovery
+
+    drive = tmp_path / "C_drive"
+    _make_vault(drive / "Projects", "Jarvis")
+
+    monkeypatch.setattr(discovery, "_SCAN_ROOTS", ())
+    monkeypatch.setattr(discovery, "_platform_scan_roots", lambda: (str(drive),))
+
+    found = discovery.discover(name="Jarvis").vaults
+    assert [v.name for v in found] == ["Jarvis"]
+    assert found[0].path.endswith("Projects/Jarvis")
+
+
+def test_platform_scan_roots_is_empty_off_windows() -> None:
+    """It must not add anything on POSIX, where the home-relative roots are
+    the right answer and a walk of ``/`` would not be."""
+    import os
+
+    from jarvis.knowledge.providers.obsidian import discovery
+
+    if os.name != "nt":
+        assert discovery._platform_scan_roots() == ()
+
+
+# ── Windows local runtime ────────────────────────────────────────────────────
+
+
+def test_a_windows_vault_path_survives_dotenv(tmp_path: Path, monkeypatch) -> None:
+    """``JARVIS_OBSIDIAN_VAULT_PATH=C:\\Projects\\Jarvis`` must arrive intact.
+
+    Unquoted matters: python-dotenv processes backslash escapes inside double
+    quotes, so a quoted Windows path would turn ``\\P`` and ``\\J`` into
+    something else. setup-windows.ps1 writes the value unquoted for this
+    reason, and the parsing is platform-independent, so it is testable here.
+    """
+    from jarvis.config import Settings, reset_config_caches
+
+    env_file = tmp_path / ".env"
+    env_file.write_text(
+        "JARVIS_OBSIDIAN_VAULT_PATH=C:\\Projects\\Jarvis\n"
+        "JARVIS_OBSIDIAN_ALLOW_WRITES=true\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("JARVIS_ENV_FILE", str(env_file))
+    monkeypatch.delenv("JARVIS_OBSIDIAN_VAULT_PATH", raising=False)
+    reset_config_caches()
+
+    settings = Settings(_env_file=str(env_file))
+    assert str(settings.obsidian_vault_path) == "C:\\Projects\\Jarvis"
+    assert settings.obsidian_allow_writes is True
+
+
+def test_the_sqlite_url_uses_forward_slashes(tmp_path: Path) -> None:
+    """A Windows data_dir would otherwise produce
+    ``sqlite+aiosqlite:///C:\\Users\\...\\jarvis.db``, and backslashes in a URL
+    are at best undefined."""
+    from jarvis.config import Settings
+
+    settings = Settings(data_dir=tmp_path, database_url=None)
+    url = settings.resolved_database_url
+    assert "\\" not in url
+    assert url.startswith("sqlite+aiosqlite:///")
+
+
+def test_kill_process_tree_reports_an_already_dead_process() -> None:
+    """The contract the timeout path relies on: False means stop escalating.
+
+    The previous version called ``os.killpg`` inline, which does not exist on
+    Windows — a timeout there raised AttributeError instead of killing
+    anything.
+    """
+    import subprocess
+
+    from jarvis.computer.terminal import kill_process_tree
+
+    process = subprocess.Popen(
+        [__import__("sys").executable, "-c", "pass"], start_new_session=True
+    )
+    process.wait()
+    assert kill_process_tree(process) is False
+
+
+async def test_kill_process_tree_stops_a_running_process() -> None:
+    import subprocess
+    import sys
+    import time
+
+    from jarvis.computer.terminal import kill_process_tree
+
+    process = subprocess.Popen(
+        [sys.executable, "-c", "import time; time.sleep(30)"], start_new_session=True
+    )
+    try:
+        assert kill_process_tree(process, force=True) is True
+        for _ in range(50):
+            if process.poll() is not None:
+                break
+            time.sleep(0.1)
+        assert process.poll() is not None
+    finally:
+        if process.poll() is None:
+            process.kill()

@@ -34,6 +34,7 @@ from __future__ import annotations
 import asyncio
 import os
 import signal
+import subprocess
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -52,7 +53,17 @@ MAX_TIMEOUT = 300.0
 
 #: Environment variables passed to a child process. An allow-list: the daemon
 #: holds API keys, and a command that can read them can exfiltrate them.
-_ENV_ALLOW = ("PATH", "HOME", "LANG", "LC_ALL", "TERM", "TZ", "USER", "SHELL")
+#:
+#: The Windows names are not optional extras. ``SYSTEMROOT`` in particular is
+#: required by the C runtime and by winsock — a process started without it
+#: fails to initialise, so omitting it would make every command on Windows
+#: fail in a way that looks like JARVIS is broken rather than misconfigured.
+_ENV_ALLOW = (
+    "PATH", "HOME", "LANG", "LC_ALL", "TERM", "TZ", "USER", "SHELL",
+    "SYSTEMROOT", "SystemRoot", "windir", "COMSPEC", "PATHEXT",
+    "TEMP", "TMP", "USERPROFILE", "HOMEDRIVE", "HOMEPATH",
+    "NUMBER_OF_PROCESSORS", "PROCESSOR_ARCHITECTURE", "OS",
+)
 
 #: Names that must never be forwarded even if added to the allow-list later.
 _ENV_DENY_SUBSTRINGS = (
@@ -123,6 +134,49 @@ class CommandResult:
         return "\n\n".join(parts)
 
 
+def kill_process_tree(process: Any, *, force: bool = False) -> bool:
+    """Terminate a child and its descendants. Returns False if it was already gone.
+
+    POSIX and Windows do not agree on what a process group is, and the
+    difference is not cosmetic: ``os.killpg`` does not exist on Windows, so the
+    previous single-platform version raised ``AttributeError`` from the timeout
+    path — a hung command would crash the handler instead of being killed.
+
+    * **POSIX** — the child is started with ``start_new_session``, so it leads
+      its own group and one ``killpg`` reaches the whole tree.
+    * **Windows** — ``taskkill /T`` walks the tree by pid. It is the only
+      reliable way to reach grandchildren; ``Popen.kill`` reaches the child
+      alone and orphans whatever it spawned.
+
+    Signals reach a process that is already dead as ``ProcessLookupError``, and
+    a caller that cannot signal it at all gets ``PermissionError`` — both mean
+    "stop escalating", which is what the boolean says.
+    """
+    if process.returncode is not None:
+        return False
+
+    if os.name == "nt":
+        try:
+            subprocess.run(
+                ["taskkill", "/PID", str(process.pid), "/T"] + (["/F"] if force else []),
+                capture_output=True, timeout=5, check=False,
+            )
+            return True
+        except (OSError, subprocess.SubprocessError):
+            # No taskkill (a stripped image), so fall back to the child alone.
+            try:
+                process.kill() if force else process.terminate()
+                return True
+            except (ProcessLookupError, PermissionError, OSError):
+                return False
+
+    try:
+        os.killpg(os.getpgid(process.pid), signal.SIGKILL if force else signal.SIGTERM)
+        return True
+    except (ProcessLookupError, PermissionError):
+        return False
+
+
 def build_environment() -> dict[str, str]:
     """A minimal environment for a child process."""
     env: dict[str, str] = {}
@@ -133,7 +187,10 @@ def build_environment() -> dict[str, str]:
         if any(marker in name.upper() for marker in _ENV_DENY_SUBSTRINGS):
             continue
         env[name] = value
-    env.setdefault("PATH", "/usr/local/bin:/usr/bin:/bin")
+    if not env.get("PATH"):
+        env["PATH"] = (
+            os.defpath if os.name == "nt" else "/usr/local/bin:/usr/bin:/bin"
+        )
     # Marks the process as JARVIS-launched, so a tool that cares can tell.
     env["JARVIS_MANAGED"] = "1"
     return env
@@ -235,14 +292,12 @@ class TerminalExecutor:
         return result
 
     async def _terminate(self, process: Any) -> tuple[bytes, bytes]:
-        """Kill the process group: TERM, then KILL if it ignores that."""
-        for send, wait in ((signal.SIGTERM, 2.0), (signal.SIGKILL, 2.0)):
-            try:
-                os.killpg(os.getpgid(process.pid), send)
-            except (ProcessLookupError, PermissionError):
+        """Escalating kill, then collect whatever the process managed to say."""
+        for escalate in (False, True):
+            if not kill_process_tree(process, force=escalate):
                 break
             try:
-                return await asyncio.wait_for(process.communicate(), timeout=wait)
+                return await asyncio.wait_for(process.communicate(), timeout=2.0)
             except asyncio.TimeoutError:
                 continue
             except Exception:

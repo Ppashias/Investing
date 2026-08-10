@@ -233,6 +233,20 @@ def detect(*, probe_display: str | None = None) -> CapabilityReport:
         return _finalise(report)
 
     if not x_display:
+        if report.os_name in {"Windows", "Darwin"}:
+            # "Headless" would be a lie about a machine with a monitor in
+            # front of it. The screen is there; JARVIS has no backend for it.
+            # Saying so is the difference between a user thinking their setup
+            # is broken and knowing the feature is not built.
+            report.notes.append(
+                f"{report.os_name} desktop detected. JARVIS has no "
+                f"{report.os_name} computer-control backend — only X11 is "
+                "implemented — so screen, mouse and keyboard actions are "
+                "unavailable here. Everything else, including Obsidian, the "
+                "knowledge base and the terminal, works normally."
+            )
+            return _finalise(report)
+
         report.notes.append(
             "No DISPLAY. This machine is headless."
             + (
