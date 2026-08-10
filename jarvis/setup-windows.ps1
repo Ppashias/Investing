@@ -118,24 +118,52 @@ if (-not (Test-Path $envPath)) {
     Write-Ok ".env already exists (leaving it alone)"
 }
 
-$envText = Get-Content $envPath -Raw
+# Handled line by line, never with a regex over the whole file.
+#
+# The previous version tested `^\s*JARVIS_API_TOKEN\s*=\s*\S+` against the
+# entire text, and `\s` matches newlines: given an empty `JARVIS_API_TOKEN=`
+# followed by a blank line and a comment, `=\s*\S+` matched across the line
+# break and found the `#`. The script concluded a token was already set,
+# skipped generating one, and left the value empty — which is exactly the
+# state a real install ended up in. A line is a line; treat it as one.
+$envLines = @(Get-Content $envPath)
+
+function Get-EnvValue {
+    param([string[]]$Lines, [string]$Key)
+    $pattern = "^\s*$([regex]::Escape($Key))\s*=(.*)$"
+    foreach ($line in $Lines) {
+        if ($line -match $pattern) { return $Matches[1].Trim() }
+    }
+    return ""
+}
 
 function Set-EnvValue {
-    param([string]$Text, [string]$Key, [string]$Value)
+    param([string[]]$Lines, [string]$Key, [string]$Value)
     # Replaces the key whether it is live or commented out, and appends it if
-    # it is absent — so re-running never produces duplicate keys.
-    $pattern = "(?m)^\s*#?\s*$([regex]::Escape($Key))\s*=.*$"
-    $line = "$Key=$Value"
-    if ($Text -match $pattern) { return [regex]::Replace($Text, $pattern, $line) }
-    return $Text.TrimEnd() + "`r`n" + $line + "`r`n"
+    # absent — so re-running never produces duplicate keys.
+    $pattern = "^\s*#?\s*$([regex]::Escape($Key))\s*="
+    $out = New-Object System.Collections.Generic.List[string]
+    $written = $false
+    foreach ($line in $Lines) {
+        if ($line -match $pattern) {
+            if (-not $written) { $out.Add("$Key=$Value"); $written = $true }
+        } else {
+            $out.Add($line)
+        }
+    }
+    if (-not $written) { $out.Add("$Key=$Value") }
+    return $out.ToArray()
 }
 
 # An API token, generated here rather than shipped. The UI needs it to talk to
 # the API; it is written to .env, which .gitignore excludes.
 $tokenGenerated = $false
-if ($envText -notmatch "(?m)^\s*JARVIS_API_TOKEN\s*=\s*\S+") {
-    $token = & $venvPython -c "import secrets; print(secrets.token_urlsafe(32))"
-    $envText = Set-EnvValue $envText "JARVIS_API_TOKEN" $token.Trim()
+if ([string]::IsNullOrWhiteSpace((Get-EnvValue $envLines "JARVIS_API_TOKEN"))) {
+    $token = (& $venvPython -c "import secrets; print(secrets.token_urlsafe(32))").Trim()
+    if ([string]::IsNullOrWhiteSpace($token)) {
+        Write-Fail "Could not generate an API token"; exit 1
+    }
+    $envLines = Set-EnvValue $envLines "JARVIS_API_TOKEN" $token
     $tokenGenerated = $true
     Write-Ok "Generated an API token"
 } else {
@@ -149,19 +177,35 @@ if ($VaultPath) {
     if (-not $resolved) {
         Write-Warn2 "$VaultPath does not exist yet - not writing it to .env."
         Write-Host  "        Create the vault in Obsidian first, or connect from the UI later."
-    } elseif (-not (Test-Path (Join-Path $resolved ".obsidian"))) {
-        Write-Warn2 "$resolved has no .obsidian folder."
-        Write-Host  "        That means Obsidian has never opened it. JARVIS can still read it"
-        Write-Host  "        as a Markdown folder, and will say so. Writing it to .env anyway."
-        $envText = Set-EnvValue $envText "JARVIS_OBSIDIAN_VAULT_PATH" $resolved
-        Write-Ok "Vault path recorded"
     } else {
-        $envText = Set-EnvValue $envText "JARVIS_OBSIDIAN_VAULT_PATH" $resolved
+        if (-not (Test-Path (Join-Path $resolved ".obsidian"))) {
+            Write-Warn2 "$resolved has no .obsidian folder."
+            Write-Host  "        That means Obsidian has never opened it. JARVIS can still read it"
+            Write-Host  "        as a Markdown folder, and will say so. Recording it anyway."
+        }
+        $envLines = Set-EnvValue $envLines "JARVIS_OBSIDIAN_VAULT_PATH" $resolved
         Write-Ok "Vault path recorded: $resolved"
     }
 }
 
-Set-Content -Path $envPath -Value $envText -NoNewline -Encoding UTF8
+# Written without a BOM. Windows PowerShell 5.1's `-Encoding UTF8` emits one,
+# and a BOM at the top of .env becomes part of the first key's name for any
+# reader that opens the file as plain utf-8 — so the first credential in the
+# file, and only that one, silently fails to resolve.
+[System.IO.File]::WriteAllLines(
+    $envPath, $envLines, (New-Object System.Text.UTF8Encoding($false))
+)
+
+# Read it back through the application, so "the token is configured" is
+# something observed rather than assumed.
+$tokenVisible = & $venvPython -c "from jarvis.config import get_secret, reset_config_caches; reset_config_caches(); print('yes' if get_secret('JARVIS_API_TOKEN') else 'no')" 2>$null
+if ($tokenVisible -notmatch "yes") {
+    Write-Fail "The API token was written to .env but JARVIS cannot read it back."
+    Write-Host  "    Send me the output of:"
+    Write-Host  "      Select-String -Path .env -Pattern JARVIS_API_TOKEN"
+    exit 1
+}
+Write-Ok "JARVIS can read the token from .env"
 
 # ── 5. Database ──────────────────────────────────────────────────────────────
 Write-Step "Applying database migrations"

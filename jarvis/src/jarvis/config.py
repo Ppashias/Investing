@@ -25,7 +25,11 @@ class Settings(BaseSettings):
     model_config = SettingsConfigDict(
         env_prefix="JARVIS_",
         env_file=os.environ.get("JARVIS_ENV_FILE", str(REPO_ROOT / ".env")),
-        env_file_encoding="utf-8",
+        # utf-8-sig, not utf-8: Windows Notepad and PowerShell both write a BOM
+        # by default, and read as plain utf-8 the BOM becomes part of the first
+        # key's name — so the first setting in the file, and only that one,
+        # silently fails to load. Identical behaviour on a file without a BOM.
+        env_file_encoding="utf-8-sig",
         extra="ignore",
     )
 

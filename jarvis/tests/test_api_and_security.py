@@ -354,3 +354,21 @@ def test_quoted_and_commented_values_are_handled(tmp_path, monkeypatch) -> None:
     provider = default_secrets_provider()
     assert provider.get("JARVIS_API_TOKEN") is None, "a commented line is not a value"
     assert provider.get("ANTHROPIC_API_KEY").reveal() == "sk-quoted"
+
+
+def test_settings_load_from_a_bom_encoded_env_file(tmp_path, monkeypatch) -> None:
+    """Notepad and PowerShell both write a BOM by default.
+
+    Read as plain utf-8 it becomes part of the first key's name, so the first
+    setting in the file silently fails to load — and it is the first setting
+    precisely because that is the one people edit first.
+    """
+    from jarvis.config import Settings
+
+    env_file = tmp_path / ".env"
+    env_file.write_text(
+        "JARVIS_PORT=9911\nJARVIS_REQUIRE_AUTH=false\n", encoding="utf-8-sig"
+    )
+    settings = Settings(_env_file=str(env_file))
+    assert settings.port == 9911
+    assert settings.require_auth is False
