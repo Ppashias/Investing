@@ -433,32 +433,48 @@ def start_virtual_display(
     Bound with ``-nolisten tcp`` so the display is reachable only through the
     local socket — a virtual display accepting network connections would be a
     remote input-injection surface.
+
+    Several display numbers are tried in turn. A display number can be taken by
+    a live server or, more annoyingly, by a stale ``/tmp/.X<n>-lock`` left by
+    one that was killed — and a daemon that gives up because of a lock file
+    from a previous run would look, from the outside, exactly like a machine
+    with no display at all.
     """
     if not shutil.which("Xvfb"):
         return None
 
-    display_name = f":{number}"
-    process = subprocess.Popen(
-        [
-            "Xvfb", display_name, "-screen", "0", f"{width}x{height}x24",
-            "-nolisten", "tcp",
-        ],
-        stdout=subprocess.DEVNULL,
-        stderr=subprocess.DEVNULL,
-    )
-
     import time
 
-    for _ in range(50):
-        time.sleep(0.1)
-        if process.poll() is not None:
-            log.warning("virtual_display_exited", display=display_name)
-            return None
-        if _probe_x11(display_name)["connected"]:
+    for candidate in range(number, number + 8):
+        display_name = f":{candidate}"
+        process = subprocess.Popen(
+            [
+                "Xvfb", display_name, "-screen", "0", f"{width}x{height}x24",
+                "-nolisten", "tcp",
+            ],
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+        )
+
+        started = False
+        for _ in range(50):
+            time.sleep(0.1)
+            if process.poll() is not None:
+                log.info("virtual_display_number_busy", display=display_name)
+                break
+            if _probe_x11(display_name)["connected"]:
+                started = True
+                break
+
+        if started:
             log.info("virtual_display_started", display=display_name,
                      size=f"{width}x{height}")
             return display_name, process
 
-    process.terminate()
-    log.warning("virtual_display_timeout", display=display_name)
+        if process.poll() is None:
+            process.terminate()
+            log.warning("virtual_display_timeout", display=display_name)
+            return None
+
+    log.warning("virtual_display_unavailable", tried=f":{number}-:{number + 7}")
     return None

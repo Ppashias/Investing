@@ -10,9 +10,13 @@ boundary. Five properties make it defensible, and each closes a specific hole:
 2. **Re-classified at execution.** The command is classified again here, from
    the string that is about to run. A caller that classified once and mutated
    the command afterwards gains nothing.
-3. **Working directory inside the allow-list.** A command runs where the
-   filesystem guard permits, so relative paths cannot escape by starting
-   somewhere else.
+3. **Path arguments inside the allow-list.** A command runs where the
+   filesystem guard permits, *and* every argument that names a real location
+   is resolved and checked against the same roots. Confining only the working
+   directory is not enough: `cat` is a read-only command by any reasonable
+   classification, and `cat /home/you/.config/gh/hosts.yml` still hands the
+   model a token. §17's boundary has to hold through §18's door or it is not
+   a boundary.
 4. **A scrubbed environment.** The child gets a minimal, explicitly built
    environment. Inheriting the daemon's would hand every API key in the
    process to any command that runs (§19).
@@ -35,7 +39,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
-from jarvis.computer.risk import CommandAssessment, classify_command
+from jarvis.computer.risk import CommandAssessment, classify_command, path_is_sensitive
 from jarvis.computer.types import ActionRisk
 from jarvis.errors import JarvisError
 from jarvis.logging import get_logger, scrub_text
@@ -167,6 +171,7 @@ class TerminalExecutor:
             )
 
         cwd = self._resolve_cwd(working_directory)
+        self._check_path_arguments(assessment.argv, cwd)
         limit = min(float(timeout or self.default_timeout), MAX_TIMEOUT)
         started = time.perf_counter()
 
@@ -266,6 +271,77 @@ class TerminalExecutor:
             f"{candidate} is outside the allowed roots",
             "That working directory is outside the approved directories.",
         )
+
+    def _check_path_arguments(self, argv: list[str], cwd: Path) -> None:
+        """Refuse a command whose arguments point outside the allow-list.
+
+        Classification says what a *program* does; it says nothing about what
+        it is pointed at. ``cat`` is read-only and therefore LOW, which in
+        ASSISTED or AUTONOMOUS mode can run without asking — so without this,
+        LOW-risk read commands would be a general-purpose way to read any file
+        the daemon can, and the filesystem allow-list would only constrain the
+        actions that go through :class:`~jarvis.computer.filesystem.FilesystemGuard`.
+
+        An argument counts as a path when it contains a separator or names
+        something that exists relative to the working directory. Everything
+        else — flags, grep patterns, git refs — is left alone, because
+        treating every token as a path would refuse most real commands.
+        Non-existent targets are checked at their nearest existing ancestor,
+        so ``touch ../outside/new.txt`` is caught before it creates anything.
+        """
+        roots = self.allowed_roots or [self.working_directory]
+
+        for arg in argv[1:]:
+            if not arg or arg.startswith("-"):
+                continue
+
+            candidate = Path(arg)
+            looks_like_path = (
+                "/" in arg
+                or arg in {".", ".."}
+                or (cwd / arg).exists()
+                or candidate.is_absolute()
+            )
+            if not looks_like_path:
+                continue
+
+            resolved = (
+                candidate.expanduser()
+                if candidate.is_absolute() or arg.startswith("~")
+                else cwd / candidate
+            ).resolve(strict=False)
+
+            sensitive = path_is_sensitive(resolved)
+            if sensitive:
+                raise CommandRefused(
+                    f"{resolved} matches {sensitive}",
+                    f"{arg} looks like credential storage, so that command "
+                    "will not run.",
+                )
+
+            # Walk up to the nearest existing ancestor: a path that does not
+            # exist yet is still going to be created somewhere, and that
+            # somewhere is what the allow-list is about.
+            probe = resolved
+            while not probe.exists() and probe.parent != probe:
+                probe = probe.parent
+
+            if not any(_contains(root, probe) for root in roots):
+                raise CommandRefused(
+                    f"{resolved} is outside the allowed roots",
+                    f"{arg} is outside the approved directories. JARVIS can "
+                    "only run commands against "
+                    + ", ".join(str(r) for r in roots)
+                    + ".",
+                )
+
+
+def _contains(root: Path, candidate: Path) -> bool:
+    try:
+        candidate.relative_to(root)
+    except ValueError:
+        return False
+    return True
 
 
 def _prepare_output(raw: bytes) -> tuple[str, bool]:

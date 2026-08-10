@@ -1,13 +1,21 @@
-# JARVIS — Core (Phases 1–2)
+# JARVIS — Core (Phases 1–3)
 
 A personal AI operating system. Conversation, tasks, tools, permissions,
-confirmation, observability, and — as of Phase 2 — persistent memory and an
-ingested knowledge base, all behind a provider-independent AI layer.
+confirmation, observability, persistent memory, an ingested knowledge base,
+and — as of Phase 3 — the ability to observe and operate the computer, all
+behind a provider-independent AI layer.
 
-**Computer control, browser control, and specialised agents are not built**, and
-neither is the Obsidian connector: the architecture is ready for one and no
-vault is reachable. The system says so plainly rather than pretending otherwise
-— see [Not implemented](#not-implemented).
+Computer control is real and it is deliberately narrow. Nothing about the
+machine is reachable by default: a fresh install can see the screen and list
+windows, and that is all. Mouse, keyboard, files, terminal, clipboard and
+applications are thirteen separate scopes, each off until switched on, each
+still subject to a mode ceiling and a risk classifier that reads what the
+action would actually do. There is no `ALLOW_COMPUTER = TRUE`.
+
+**Browser automation and specialised agents are not built**, and neither is
+the Obsidian connector: the architecture is ready for one and no vault is
+reachable. The system says so plainly rather than pretending otherwise — see
+[Not implemented](#not-implemented).
 
 ---
 
@@ -80,10 +88,22 @@ Orchestrator ─── 7-stage pipeline
    │      ├── PermissionEngine   ALLOW / ASK / DENY
    │      ├── ConfirmationService   suspend, persist, resume
    │      └── ActivityService   append-only record + live SSE
-   └── MemoryEvaluator   after the answer: what was worth remembering?
+   ├── MemoryEvaluator   after the answer: what was worth remembering?
+   │
+   └── ComputerService ─── computer control (Phase 3)
+          │
+          ├── CapabilityReport   what this machine can actually do, probed
+          ├── ComputerPolicyEngine   mode × scope × risk, 11 ordered steps
+          ├── ActionExecutor  ← the only path to the machine
+          │      ├── EmergencyStop     checked last, before every action
+          │      ├── FilesystemGuard   resolve → deny → allow
+          │      ├── TerminalExecutor  no shell, argv, scrubbed environment
+          │      ├── DesktopBackend    X11 · XTEST  (or "unavailable, because…")
+          │      └── ComputerAudit     every path, including the refusals
+          └── ComputerAgent   PLAN → ACT → OBSERVE → VERIFY → REPLAN
    │
    ▼
-SQLite (WAL) — 19 tables, Alembic migrations, vectors in the same file
+SQLite (WAL) — 21 tables, Alembic migrations, vectors in the same file
 ```
 
 ### Design decisions worth knowing
@@ -194,6 +214,80 @@ except `/api/health`.
 | `POST` | `/knowledge/ingest/upload` | Ingest an uploaded file. |
 | `POST` | `/knowledge/ingest/path` | Ingest from an allow-listed directory. |
 | `GET` | `/knowledge/sources` | Providers, formats, roots. |
+| `GET` | `/computer/status` | Display, backend, mode, scopes, stop state. |
+| `GET` | `/computer/capabilities` | Per action: available, and if not, why. |
+| `POST` | `/computer/stop` | Emergency stop. Sets the latch first, audits after. |
+| `POST` | `/computer/resume` | Release it. No tool can reach either. |
+| `GET` | `/computer/observe` | Observe on demand. There is no stream. |
+| `GET` | `/computer/screenshot/{id}` | A held screenshot, until its TTL expires. |
+| `POST` | `/computer/action` | One action, through the executor. |
+| `POST` | `/computer/tasks` · `GET` `/computer/tasks` | Run and list closed-loop tasks. |
+| `POST` | `/computer/tasks/{id}/cancel` | Cancel a running task. |
+| `GET` | `/computer/permissions` · `PATCH` | Mode and scopes. |
+| `GET` | `/computer/audit` | What JARVIS did. Read-only: there is no write route. |
+
+---
+
+## Computer control
+
+Nothing is on by default beyond looking. A fresh install is `SAFE` mode with
+`SCREEN` and `WINDOW` enabled and no scope automatic, which means JARVIS can
+tell you what is on screen and must ask before doing anything else.
+
+**Four modes, as a ceiling rather than a setting.** `LOCKDOWN` denies
+everything including observation. `SAFE` and `ASSISTED` auto-allow nothing
+above `LOW`. `AUTONOMOUS` reaches `MEDIUM`. `HIGH` always meets a human in
+every mode, and `PROHIBITED` is refused in all of them — no grant, no mode and
+no configuration enables a `PROHIBITED` action.
+
+**Thirteen scopes,** each switched separately: `SCREEN`, `WINDOW`, `MOUSE`,
+`KEYBOARD`, `APPLICATION`, `FILESYSTEM`, `TERMINAL`, `CLIPBOARD`, `NETWORK`,
+`BROWSER`, and three — `FINANCIAL`, `COMMUNICATION`, `SYSTEM_SETTINGS` — that
+are not merely off but **absent**: they are rejected at the API, filtered out
+of stored configuration, and denied at step 2 of the policy engine. Autonomous
+money movement needs safety architecture that does not exist yet, and a
+configuration flag is not that architecture.
+
+Enabling a scope means *may do this*. A second switch, `auto`, means *may do
+this without asking*. Disabling a scope drops its auto flag with it, so there
+is never a live "no need to ask" for something that is off.
+
+**Risk is computed, never declared.** The caller does not get to say how
+dangerous its action is. `classify_risk` reads the content: a write to a
+scratch file and a write to `~/.bashrc` are the same `ActionKind` and are not
+the same risk. Classification can only raise — there is no path by which
+inspecting an action makes it safer.
+
+**Commands run without a shell.** `subprocess` with an argv list and
+`shell=False`, so there is no interpreter to inject into; shell metacharacters
+are refused before parsing rather than analysed; an unrecognised program is
+`HIGH`, because the default for something nobody has reasoned about is "ask a
+human". Path arguments are confined to the same allow-list the filesystem
+tools use, and the child gets a scrubbed environment — a command JARVIS runs
+cannot read the API keys JARVIS holds.
+
+**The emergency stop is a latch, not a request.** A process-global flag,
+engaged directly by its route without touching the orchestrator or the
+database, and checked *last* — immediately before execution — so an approval
+granted a minute ago does not run if the stop went on in between. No tool
+reaches it in either direction: the model can neither engage nor release it.
+
+**Multi-step work is a closed loop,** not a plan of fifty actions: plan one
+step, act, observe, verify, replan from what actually happened. Verification
+is anchored to where the action was aimed, so a click that lands on nothing
+while a clock ticks elsewhere reports `INCONCLUSIVE` rather than success.
+
+**Screenshots are held in memory,** with a TTL and a cap, and are never
+written to disk unless retention is switched on. Observation is pull-based —
+there is no continuous recording.
+
+On a headless machine, set `JARVIS_COMPUTER_VIRTUAL_DISPLAY=true` to run
+against Xvfb. The status endpoint and the Computer panel both label that
+display as virtual; there is no physical screen behind it and JARVIS does not
+imply there is.
+
+The security review for this layer, including three defects found and fixed
+during it, is in `docs/jarvis/03-phase3-security-review.md`.
 
 ---
 
@@ -304,8 +398,11 @@ with deliberately no implementation.
 
 ## Tools
 
-Eleven. Nothing here can touch anything outside JARVIS's own store: no tool
-declares `EXECUTE` or `EXTERNAL_ACTION`, and a test enforces it.
+Twenty-three. The first eleven cannot touch anything outside JARVIS's own
+store. The twelve added in Phase 3 can touch the machine, and every one of
+them goes through `ComputerService.execute_action` — there is no second path,
+which is what makes "no tool bypasses the permission system" a checkable claim
+rather than an intention.
 
 | Tool | Capability | Risk | What it does |
 |---|---|---|---|
@@ -320,6 +417,24 @@ declares `EXECUTE` or `EXTERNAL_ACTION`, and a test enforces it.
 | `forget` | WRITE | LOW | Archive one memory (reversible). |
 | `forget_project_memories` | WRITE | MEDIUM | Bulk archive. Always asks. |
 | `search_knowledge` | READ | NONE | Search ingested documents. |
+| `computer_status` | READ | NONE | Display, mode, scopes, stop state. |
+| `list_windows` | READ | NONE | Open windows and which is focused. |
+| `observe_screen` | READ | LOW | Structured state, image only if needed. |
+| `read_file` | READ | LOW | Read inside the allow-list. |
+| `list_directory` | READ | NONE | List inside the allow-list. |
+| `scroll` | EXECUTE | LOW | Scroll the focused window. |
+| `click` | EXECUTE | MEDIUM | Click at a coordinate. |
+| `type_text` | EXECUTE | MEDIUM | Type. Refuses credential-shaped text. |
+| `press_key` | EXECUTE | MEDIUM | A key or a chord. |
+| `open_application` | EXECUTE | MEDIUM | Allow-listed name, constrained arguments. |
+| `write_file` | WRITE | MEDIUM | Write inside the allow-list. No executables. |
+| `run_command` | EXECUTE | HIGH | Classified, argv-executed, no shell. |
+
+The declared risk on a computer tool is a **floor, not a verdict.** The real
+classification happens in `classify_risk` from the action's content, so
+`run_command("pwd")` is `LOW` and `run_command("rm -rf ~/x")` is `HIGH` —
+flooring every command at the tool's declared `HIGH` would make `pwd`
+indistinguishable from `rm` and train the user to approve everything.
 
 There is deliberately no `delete_task` and no hard-delete memory tool —
 deletion is irreversible, and archiving is what "forget that" actually means.
@@ -357,13 +472,18 @@ automatically — there is no way to opt out.
 ## Development
 
 ```bash
-./.venv/bin/python -m pytest            # 296 tests
+./.venv/bin/python -m pytest            # 434 tests
 ./.venv/bin/alembic revision --autogenerate -m "what changed"
 ./.venv/bin/alembic upgrade head
 ```
 
 Tests use in-memory SQLite and a `StubProvider` test double, so they need no
 API key and touch no real data. The stub lives in `tests/`, never in `src/`.
+
+`tests/test_computer_desktop.py` is the exception: it starts a real Xvfb
+server and drives it through XTEST, because a mocked backend cannot tell you
+whether the clipboard round-trips or whether typing changes the screen. It
+skips cleanly when Xvfb is not installed.
 
 ---
 
@@ -383,10 +503,19 @@ Absent from the UI rather than stubbed:
   work without one; automatic extraction needs a model and reports that it is
   unavailable rather than silently doing nothing.
 - **Two-way sync of any kind.** Nothing writes back to any external source.
-- **File access on demand** (Phase 3) — ingestion reads from an allow-list;
-  JARVIS cannot browse or write your filesystem.
-- **Computer control** — screen, mouse, keyboard, applications (Phase 3/4)
-- **Browser control** (Phase 5)
+- **Accessibility-tree reading.** Observation is windows plus pixels. No
+  AT-SPI bus is available here, so JARVIS cannot enumerate a button by name —
+  it locates targets visually, and says so rather than implying otherwise.
+- **macOS and Windows desktop backends.** The backend interface is
+  platform-neutral and only X11 is implemented; elsewhere every action reports
+  `unavailable` with the reason instead of failing obscurely.
+- **Autonomous financial, purchasing or communication actions.** Not disabled
+  — absent. The scopes are rejected at the API and denied in the engine.
+- **Unrestricted shell access.** Commands go through a classifier and an argv
+  executor with no shell; `PROHIBITED` is refused in every mode.
+- **Browser automation** — page objects, form filling, navigation as a
+  first-class capability (Phase 4). JARVIS can open a browser and click in it
+  as pixels; it has no understanding of the page.
 - **Specialised agents and delegation** (Phase 6)
 - **Calendar, mail, daily planner** (Phase 7)
 - **Streaming chat responses.** The provider layer implements streaming and the
@@ -401,3 +530,6 @@ Absent from the UI rather than stubbed:
 - `docs/jarvis/02-phase2-security-review.md` — Phase 2 security review,
   including the residual prompt-injection risk and what must not regress when
   Phase 3 adds filesystem tools
+- `docs/jarvis/03-phase3-security-review.md` — Phase 3 security review: three
+  defects found and fixed, and an honest account of what command
+  classification does and does not buy

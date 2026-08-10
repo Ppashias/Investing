@@ -37,11 +37,21 @@ class BackendUnavailable(JarvisError):
 
 
 class BackendError(JarvisError):
-    """The operation was attempted and failed."""
+    """The operation was attempted and failed.
+
+    The message is passed through as the user-facing text. These are written
+    for a person — "'/bin/sh' is not an approved application. Available:
+    chromium." — and inheriting JarvisError's generic default would replace
+    every one of them with "Something went wrong on my side", which tells the
+    user nothing and tells the model nothing it can act on.
+    """
 
     code = "computer_action_failed"
     http_status = 500
     retryable = True
+
+    def __init__(self, message: str, user_message: str | None = None) -> None:
+        super().__init__(message, user_message=user_message or message)
 
 
 class DesktopBackend(abc.ABC):

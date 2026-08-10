@@ -26,6 +26,7 @@ failed. A log that only records successes answers the wrong question.
 from __future__ import annotations
 
 import asyncio
+import re
 import time
 from dataclasses import dataclass
 from typing import Any
@@ -63,6 +64,10 @@ ACTION_TIMEOUTS: dict[ActionKind, float] = {
     ActionKind.DRAG: 15.0,
 }
 DEFAULT_ACTION_TIMEOUT = 10.0
+
+#: A URI scheme at the start of an argument. Two characters minimum, so a
+#: Windows drive letter is not mistaken for one.
+_URI_SCHEME = re.compile(r"^[a-zA-Z][a-zA-Z0-9+.\-]+:")
 
 #: Parameter names whose *values* never reach the audit log or a log line.
 _REDACT_PARAMS = frozenset({"text", "content", "value"})
@@ -393,6 +398,14 @@ class ActionExecutor:
         The name is a key into the discovered-applications map, never a path.
         Accepting a path would make this an arbitrary-execution primitive with
         a friendlier name than ``execute_command``.
+
+        Arguments are constrained for the same reason. An allow-listed
+        executable plus an unconstrained argument vector is still arbitrary
+        behaviour — ``chromium --user-data-dir=... --load-extension=...`` is a
+        different program from ``chromium https://example.com``. Only http(s)
+        URLs and paths inside the filesystem allow-list get through; flags do
+        not, and the two this container needs for Chromium are added below by
+        JARVIS rather than accepted from a caller.
         """
         import os
         import subprocess
@@ -404,14 +417,28 @@ class ActionExecutor:
                 f"{name!r} is not an approved application. Available: {available}."
             )
 
+        checked = [self._check_launch_argument(str(a)) for a in arguments]
+
         display = getattr(self.backend, "_display_name", None)
-        env = dict(os.environ)
+        # The scrubbed environment, not the daemon's. A launched application is
+        # no more entitled to ANTHROPIC_API_KEY than a launched command is
+        # (§19), and inheriting os.environ here would have quietly undone the
+        # allow-list that terminal.py builds so carefully.
+        from jarvis.computer.terminal import build_environment
+
+        env = build_environment()
+        for name_ in ("XAUTHORITY", "XDG_RUNTIME_DIR", "DBUS_SESSION_BUS_ADDRESS"):
+            value = os.environ.get(name_)
+            if value:
+                env[name_] = value
         if display:
             env["DISPLAY"] = display
+        elif os.environ.get("DISPLAY"):
+            env["DISPLAY"] = os.environ["DISPLAY"]
 
         # Chromium refuses to run as root without --no-sandbox, and this
         # container is root. Added only for the browser, only when needed.
-        argv = [executable, *[str(a) for a in arguments]]
+        argv = [executable, *checked]
         if "chrom" in executable.lower():
             argv[1:1] = ["--no-sandbox", "--disable-gpu", "--disable-dev-shm-usage"]
 
@@ -443,6 +470,37 @@ class ActionExecutor:
             f"Opened {name} (pid {process.pid})."
             + ("" if appeared else " No window appeared yet."),
         )
+
+    def _check_launch_argument(self, argument: str) -> str:
+        """Accept a URL or an allow-listed path. Refuse everything else."""
+        if argument.startswith("-"):
+            raise BackendError(
+                f"{argument!r} is a command-line flag. JARVIS passes only URLs "
+                "and approved file paths to an application, because flags can "
+                "change what the program fundamentally does."
+            )
+        if argument.startswith(("http://", "https://")):
+            return argument
+        if argument.startswith("file://"):
+            # Legitimate — opening a local document in a viewer — but a
+            # ``file://`` URL is a filesystem read wearing a URL, so it clears
+            # the same boundary. Otherwise ``file:///etc/shadow`` would be a
+            # way to put a file on screen that read_file refuses to open.
+            from urllib.parse import unquote, urlparse
+
+            path = unquote(urlparse(argument).path)
+            return "file://" + str(self.filesystem.check(path, operation="read"))
+        # Any other URI scheme, with or without the ``//``. ``javascript:`` and
+        # ``data:`` have no authority component, and matching on ``://`` alone
+        # would let both through as if they were relative paths.
+        if _URI_SCHEME.match(argument):
+            raise BackendError(
+                f"{argument!r} uses a scheme JARVIS will not open. Only http, "
+                "https and approved file:// URLs are passed to an application."
+            )
+        # Anything else is treated as a path and must clear the same boundary
+        # a read would (§17), so opening a file cannot reach outside the roots.
+        return str(self.filesystem.check(argument, operation="read"))
 
     async def _close_application(self, name: str) -> tuple[dict[str, Any], str]:
         """Close only what JARVIS started.
