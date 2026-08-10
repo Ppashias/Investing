@@ -301,6 +301,16 @@ class ExecuteStage(Stage):
                     "embeddings": self.embeddings,
                     "project_id": ctx.project_id,
                     "computer": self.computer,
+                    # The *same* ActivityService the executor writes its
+                    # TOOL_CALL and PERMISSION_DECISION rows through, bound to
+                    # this request's session. A tool that keeps its own
+                    # subject-specific audit — Obsidian does — needs a way to
+                    # reach the existing recorder; without it the vault audit
+                    # was blind to precisely the operations it exists to
+                    # answer for, namely the ones JARVIS performed itself.
+                    # Passing the service rather than the bus keeps one audit
+                    # system and one session.
+                    "activity": self.activity,
                 },
             )
             try:

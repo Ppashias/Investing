@@ -487,12 +487,26 @@ class ObsidianService:
         actor: str = "user",
         confirmation_body: str | None = None,
         arguments: dict[str, Any] | None = None,
+        confirmed_by_caller: bool = False,
     ) -> None:
-        """Authorise or stop. Raises on DENY and on ASK.
+        """Authorise or stop. Raises on DENY, and on ASK unless already asked.
 
         The ``ASK`` path raises :class:`ConfirmationRequiredError` with a
         persisted confirmation, reusing Phase 1's fingerprint-bound, single-use
         approvals — so approving one deletion cannot authorise a different one.
+
+        ``confirmed_by_caller`` exists for one caller: a tool running under
+        :class:`~jarvis.tools.executor.ToolExecutor`, which has *already*
+        obtained the user's approval for this exact call. Without it an agent
+        write raised two confirmations for one act — the executor's and this
+        one — and the user was asked twice to permit a single note.
+
+        It suppresses only the *question*, never the answer. DENY still raises,
+        the operator switches are still checked first, and taint still
+        escalates. The floor it relies on is that those tools declare
+        ``requires_confirmation=True``, which the executor honours regardless
+        of any grant — so a broad grant cannot make an agent vault write
+        silent, which is the property that matters.
         """
         decision = await self.authorize(
             operation, target=target, tainted=tainted, actor=actor
@@ -514,6 +528,19 @@ class ObsidianService:
             )
 
         if decision.mode is PermissionMode.ASK:
+            if confirmed_by_caller:
+                # Recorded, not silent: the audit says the operation proceeded
+                # on an approval obtained one layer up, so "who allowed this?"
+                # is still answerable from the log alone.
+                await self._audit(
+                    operation, status="APPROVED", target=target, actor=actor,
+                    summary=f"Obsidian {operation} approved by the caller's "
+                            "confirmation",
+                    detail={"reason": decision.reason,
+                            "rules": decision.applied_rules},
+                )
+                return
+
             if self.confirmations is None:
                 await self._audit(
                     operation, status="DENIED", target=target,

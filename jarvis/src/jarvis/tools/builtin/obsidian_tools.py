@@ -54,14 +54,25 @@ _TRUST = (
 
 
 async def _service(ctx: ToolContext) -> ObsidianService:
-    from jarvis.activity.service import ActivityService
+    """Build the service a tool acts through.
+
+    ``extras["activity"]`` is the ActivityService the tool executor is already
+    using for this request — the same object, the same session. Reusing it is
+    what keeps one audit system: the executor records TOOL_CALL and
+    PERMISSION_DECISION, and this records the OBSIDIAN_ACTION alongside them.
+    They describe different things and neither duplicates the other.
+
+    It is looked up rather than required because the tool must still work when
+    a caller assembles a context by hand; ``None`` degrades to no
+    subject-specific audit rather than failing the operation. The orchestrator
+    always provides it, and a test asserts that.
+    """
     from jarvis.confirmations.service import ConfirmationService
 
-    bus = ctx.extras.get("activity_bus")
     return ObsidianService(
         ctx.session,
         ctx.user_id,
-        activity=ActivityService(ctx.session, bus) if bus is not None else None,
+        activity=ctx.extras.get("activity"),
         confirmations=ConfirmationService(ctx.session),
     )
 
@@ -250,6 +261,10 @@ async def list_obsidian_notes(
     },
     capability=Capability.WRITE,
     risk_level=RiskLevel.LOW,
+    # Always confirmed, whatever the grants say. The executor honours this
+    # independently of the permission decision, so a broad WRITE grant cannot
+    # make a note appear in the user's vault without them agreeing to it.
+    requires_confirmation=True,
     category="obsidian",
 )
 async def create_obsidian_note(
@@ -269,10 +284,13 @@ async def create_obsidian_note(
     # Raises ConfirmationRequiredError on ASK — the tool executor suspends the
     # turn on it, so the approval is the user's and the note is not written
     # until they give it.
+    # The executor has already obtained the user's approval for this exact
+    # call — the tool declares requires_confirmation. This checks the operator
+    # switches, the engine and taint, and does not ask again.
     await service.guard(
         "create", target=target, tainted=ctx.tainted, actor="agent",
-        confirmation_body=f"Create {target} in your Obsidian vault.",
         arguments={"title": title},
+        confirmed_by_caller=True,
     )
 
     try:
@@ -319,6 +337,7 @@ async def create_obsidian_note(
     },
     capability=Capability.WRITE,
     risk_level=RiskLevel.MEDIUM,
+    requires_confirmation=True,
     category="obsidian",
 )
 async def update_obsidian_note(
@@ -337,13 +356,8 @@ async def update_obsidian_note(
     operation = "overwrite" if mode == "replace" else "append"
     await service.guard(
         operation, target=path, tainted=ctx.tainted, actor="agent",
-        confirmation_body=(
-            f"Replace the entire contents of {path}. The current text will be "
-            "lost."
-            if mode == "replace"
-            else f"Add to {path} in your Obsidian vault."
-        ),
         arguments={"mode": mode, "section": section},
+        confirmed_by_caller=True,
     )
 
     try:
