@@ -31,14 +31,25 @@ def test_health_is_public_and_minimal(client: TestClient) -> None:
 
 def test_system_status_lists_tools_and_providers(client: TestClient) -> None:
     body = client.get("/api/system/status").json()
-    assert body["tools"]["count"] == 5
+    assert body["tools"]["count"] == 11
     assert body["providers"][0]["key"] == "stub"
 
 
 def test_system_status_never_returns_a_credential(client: TestClient) -> None:
     raw = client.get("/api/system/status").text.lower()
-    for marker in ("api_key", "apikey", "token", "secret", "password"):
+    for marker in ("api_key", "apikey", "secret", "password"):
         assert marker not in raw
+    # "token" appears legitimately in token-count fields, so it is matched
+    # against the credential-shaped forms rather than the bare word.
+    for marker in ("api_token", "access_token", "bearer "):
+        assert marker not in raw
+
+
+def test_system_status_declares_whether_search_is_semantic(client: TestClient) -> None:
+    """The user must be able to tell lexical fallback from real embeddings."""
+    body = client.get("/api/system/status").json()
+    assert body["embeddings"]["semantic"] is False
+    assert "lexical" in body["embeddings"]["description"].lower()
 
 
 def test_task_crud(client: TestClient) -> None:

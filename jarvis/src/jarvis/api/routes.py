@@ -481,6 +481,8 @@ async def system_prompt(core: CoreDep, session: SessionDep, user: UserDep,
     }
 
 
+from jarvis.api.memory_routes import MEMORY_ROUTERS  # noqa: E402
+
 ALL_ROUTERS = [
     health_router,
     chat_router,
@@ -491,4 +493,5 @@ ALL_ROUTERS = [
     confirmations_router,
     activity_router,
     system_router,
+    *MEMORY_ROUTERS,
 ]

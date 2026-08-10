@@ -47,6 +47,7 @@ from jarvis.providers.base import (  # noqa: E402
     ToolUseBlock,
     Usage,
 )
+from jarvis.providers.embeddings import LexicalEmbeddingProvider
 from jarvis.providers.registry import ProviderRegistry  # noqa: E402
 from jarvis.providers.retry import RetryPolicy  # noqa: E402
 from jarvis.providers.router import ModelRouter  # noqa: E402
@@ -220,6 +221,11 @@ async def core(settings: Settings, stub: StubProvider) -> AsyncIterator[JarvisCo
     router = ModelRouter(providers, settings)
     bus = ActivityBus()
 
+    # The lexical vectoriser, deliberately: tests must be deterministic and
+    # must not need an embedding endpoint. Its scores are lexical, which is
+    # exactly what the retrieval tests assert against.
+    embeddings = LexicalEmbeddingProvider()
+
     instance = JarvisCore(
         settings=settings,
         database=database,
@@ -227,6 +233,7 @@ async def core(settings: Settings, stub: StubProvider) -> AsyncIterator[JarvisCo
         tools=tools,
         router=router,
         activity_bus=bus,
+        embeddings=embeddings,
         orchestrator=Orchestrator(
             registry=tools,
             router=router,
@@ -234,6 +241,12 @@ async def core(settings: Settings, stub: StubProvider) -> AsyncIterator[JarvisCo
             retry=RetryPolicy(max_attempts=2, base_delay=0.001),
             tool_timeout_seconds=settings.tool_timeout_seconds,
             max_iterations=settings.max_agent_iterations,
+            embeddings=embeddings,
+            # Ambient capture off by default in tests: it would fire a second
+            # provider call on every orchestrator test and consume stub
+            # responses the test queued for the main turn. The evaluator has
+            # its own tests that switch it on explicitly.
+            memory_capture_mode="off",
         ),
     )
     await instance.startup(create_schema=True)

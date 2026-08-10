@@ -34,16 +34,75 @@ from jarvis.tools.registry import ToolRegistry, build_default_registry
 def test_default_registry_has_expected_tools() -> None:
     names = {t.name for t in build_default_registry().all()}
     assert names == {
-        "get_current_time", "system_status", "create_task", "list_tasks", "update_task"
+        # Phase 1
+        "get_current_time", "system_status", "create_task", "list_tasks", "update_task",
+        # Phase 2
+        "remember", "recall", "update_memory", "forget", "forget_project_memories",
+        "search_knowledge",
     }
 
 
-def test_all_phase1_tools_are_safe() -> None:
-    """Phase 1 ships nothing irreversible and nothing above LOW risk."""
+def test_no_tool_can_reach_outside_jarvis() -> None:
+    """Phases 1-2 ship nothing that can touch anything but JARVIS's own store.
+
+    EXECUTE and EXTERNAL_ACTION arrive with the filesystem and browser in
+    Phases 3-5. Until then a tool declaring either would be a capability the
+    permission defaults have never been reasoned about for.
+    """
     for t in build_default_registry().all():
-        assert t.reversible is True, f"{t.name} is irreversible"
-        assert t.risk_level in (RiskLevel.NONE, RiskLevel.LOW), f"{t.name} too risky"
-        assert t.capability in (Capability.READ, Capability.WRITE)
+        assert t.capability in (Capability.READ, Capability.WRITE), t.name
+        assert t.risk_level in (
+            RiskLevel.NONE, RiskLevel.LOW, RiskLevel.MEDIUM
+        ), f"{t.name} is {t.risk_level.value}"
+
+
+def test_irreversible_tools_can_never_be_auto_allowed() -> None:
+    """The floor that makes one irreversible tool acceptable.
+
+    Phase 2 adds `forget_project_memories`, the first tool marked irreversible.
+    It archives rather than erases, so the marking is a deliberate use of the
+    permission engine's irreversibility floor: a bulk operation must always
+    meet a human, whatever grants exist. The engine half is exercised by the
+    test below; this half asserts no read-only tool carries the marking, which
+    would make it meaningless.
+    """
+    irreversible = [t for t in build_default_registry().all() if not t.reversible]
+    assert irreversible, "expected at least one irreversible tool to guard"
+
+    for t in irreversible:
+        assert t.capability is not Capability.READ, (
+            f"{t.name} is marked irreversible but only reads"
+        )
+
+
+async def test_irreversible_tool_is_floored_to_ask(session, user) -> None:
+    """The floor, exercised for real against a grant that would allow it."""
+    from jarvis.db.models import PermissionGrant, PermissionMode
+    from jarvis.permissions.engine import PermissionEngine, PermissionRequest
+
+    tool = build_default_registry().get("forget_project_memories")
+    session.add(
+        PermissionGrant(
+            user_id=user.id,
+            capability=tool.capability,
+            resource_scope=tool.resource,
+            mode=PermissionMode.ALLOW,
+        )
+    )
+    await session.flush()
+
+    decision = await PermissionEngine(session).evaluate(
+        PermissionRequest(
+            user_id=user.id,
+            capability=tool.capability,
+            resource=tool.resource,
+            risk_level=tool.risk_level,
+            reversible=tool.reversible,
+            tool_name=tool.name,
+        )
+    )
+    assert decision.mode is PermissionMode.ASK
+    assert "irreversible_floor" in decision.applied_rules
 
 
 def test_duplicate_registration_rejected() -> None:

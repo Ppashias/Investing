@@ -35,7 +35,11 @@ class BlockOrder(IntEnum):
     USER_CONTEXT = 600
     PROJECT_CONTEXT = 700
     TASK_CONTEXT = 800
-    MEMORY = 850          # Phase 2 fills this
+    MEMORY = 850
+    # Knowledge sits after memory and before runtime: it is the largest and
+    # least trusted block, so it is also the first thing worth dropping when
+    # the budget is tight.
+    KNOWLEDGE = 870
     RUNTIME_CONTEXT = 900
 
 

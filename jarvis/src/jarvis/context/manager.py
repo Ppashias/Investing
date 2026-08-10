@@ -4,10 +4,14 @@ The brief (§12) is explicit that the model must not be handed the whole
 database or the whole conversation. This module decides what a given request
 actually needs and enforces a budget.
 
-Phase 1 assembles four sources: recent conversation turns, open tasks, user
-configuration, and (stubbed) memory. Phase 2 replaces the memory stub with real
-retrieval — the seam is :meth:`ContextManager._load_memory`, and nothing else
-needs to change when it does.
+Phase 1 assembled four sources: recent conversation turns, open tasks, user
+configuration, and a stubbed memory block. Phase 2 fills in the last of those
+and adds two more — retrieved knowledge, and real project context — through the
+same budgeted path.
+
+Memory and knowledge are assembled here rather than in a stage of their own so
+that one object owns the budget. Two components each independently deciding
+they may spend 8,000 characters is how a context window overflows.
 
 Budgeting is deliberately crude. Token counts are estimated at ~4 characters
 per token rather than measured, because measuring means a round trip per
@@ -43,7 +47,10 @@ class ContextBudget:
     max_history_messages: int = 40
     max_history_chars: int = 60_000
     max_tasks: int = 15
-    max_memories: int = 10
+    max_memories: int = 8
+    max_memory_chars: int = 6_000
+    max_knowledge: int = 6
+    max_knowledge_chars: int = 8_000
 
 
 @dataclass(slots=True)
@@ -56,6 +63,13 @@ class ContextBundle:
     project_context: str = ""
     task_context: str = ""
     memory_context: str = ""
+    knowledge_context: str = ""
+    #: True when anything assembled came from untrusted content. Threaded to
+    #: the permission engine, which escalates non-read capabilities (§42).
+    tainted: bool = False
+    #: Retrieval diagnostics, surfaced by /api/system/prompt and the UI so the
+    #: question "why did it remember that?" has an answer.
+    retrieval: dict[str, Any] = field(default_factory=dict)
     #: True when history was trimmed — surfaced in the prompt so the model
     #: knows not to claim knowledge of turns it cannot see.
     truncated: bool = False
@@ -66,13 +80,25 @@ class ContextBundle:
         total = sum(len(m.content or "") for m in self.history)
         total += len(self.user_context) + len(self.project_context)
         total += len(self.task_context) + len(self.memory_context)
+        total += len(self.knowledge_context)
         return total // CHARS_PER_TOKEN
 
 
 class ContextManager:
-    def __init__(self, session: AsyncSession, budget: ContextBudget | None = None) -> None:
+    def __init__(
+        self,
+        session: AsyncSession,
+        budget: ContextBudget | None = None,
+        *,
+        embeddings: Any = None,
+        memory_enabled: bool = True,
+        knowledge_enabled: bool = True,
+    ) -> None:
         self.session = session
         self.budget = budget or ContextBudget()
+        self.embeddings = embeddings
+        self.memory_enabled = memory_enabled
+        self.knowledge_enabled = knowledge_enabled
 
     async def assemble(
         self,
@@ -94,14 +120,19 @@ class ContextManager:
             bundle.task_context = await self._load_task_context(user_id)
 
         if project_id:
-            bundle.project_context = self._load_project_context(project_id)
+            bundle.project_context = await self._load_project_context(project_id)
 
-        bundle.memory_context = await self._load_memory(user_id, query)
+        if query:
+            await self._load_memory(bundle, user_id, query, project_id)
+            await self._load_knowledge(bundle, user_id, query, project_id)
 
         bundle.stats = {
             "history_messages": len(bundle.history),
             "history_truncated": bundle.truncated,
             "approx_tokens": bundle.approx_tokens,
+            "memories": len(bundle.retrieval.get("memories", [])),
+            "knowledge": len(bundle.retrieval.get("knowledge", [])),
+            "tainted": bundle.tainted,
         }
         log.debug("context_assembled", **bundle.stats)
         return bundle
@@ -165,17 +196,106 @@ class ContextManager:
         )
         return header + "\n" + "\n".join(lines)
 
-    @staticmethod
-    def _load_project_context(project_id: str) -> str:
-        # Projects arrive in Phase 7. Carrying the id through now means the
-        # prompt shape does not change when they do.
-        return f"Working within project {project_id}."
+    async def _load_project_context(self, project_id: str) -> str:
+        """Real project context (§27).
 
-    async def _load_memory(self, user_id: str, query: str | None) -> str:
-        """Phase 2 seam.
-
-        Returns nothing today. Deliberately not stubbed with placeholder text:
-        an empty block is honest, whereas fabricated "remembered" content would
-        make the model claim recall it does not have.
+        The project's own summary — state, goals, decisions, task counts —
+        rather than the id Phase 1 carried through. Individual project facts
+        are left to retrieval; putting them all here would spend the budget on
+        things this request may not need.
         """
-        return ""
+        from jarvis.memory.projects import ProjectService
+
+        service = ProjectService(self.session)
+        try:
+            summary = await service.summarise(project_id)
+        except Exception as exc:
+            log.warning("project_context_failed", project_id=project_id,
+                        error=str(exc))
+            return f"Working within project {project_id}."
+        return ProjectService.to_prompt_block(summary)
+
+    async def _load_memory(
+        self,
+        bundle: ContextBundle,
+        user_id: str,
+        query: str,
+        project_id: str | None,
+    ) -> None:
+        """Retrieve the few memories this request needs (§19).
+
+        Failure is non-fatal by design: a turn answered without memory is worse
+        than one answered with it, and far better than no turn at all. The
+        warning is logged rather than surfaced, because the user asked a
+        question, not for a status report on the retriever.
+        """
+        if not self.memory_enabled:
+            return
+
+        from jarvis.memory.retrieval import MemoryRetriever, RetrievalQuery
+
+        try:
+            result = await MemoryRetriever(
+                self.session, embeddings=self.embeddings
+            ).retrieve(
+                RetrievalQuery(
+                    text=query,
+                    user_id=user_id,
+                    project_id=project_id,
+                    limit=self.budget.max_memories,
+                    max_chars=self.budget.max_memory_chars,
+                )
+            )
+        except Exception as exc:
+            log.warning("memory_retrieval_failed", error=str(exc))
+            return
+
+        bundle.memory_context = result.as_prompt_block(self.budget.max_memory_chars)
+        bundle.tainted = bundle.tainted or result.tainted
+        bundle.retrieval["memories"] = result.describe()
+        bundle.retrieval["memory_ms"] = round(result.duration_ms, 2)
+        bundle.retrieval["semantic"] = result.semantic_used
+
+        if result.memories:
+            # Retrieval is an access. Recording it is what makes "which
+            # memories actually get used?" answerable, and later, prunable.
+            from jarvis.memory.service import MemoryService
+
+            await MemoryService(self.session).mark_accessed(
+                [item.memory for item in result.memories]
+            )
+
+    async def _load_knowledge(
+        self,
+        bundle: ContextBundle,
+        user_id: str,
+        query: str,
+        project_id: str | None,
+    ) -> None:
+        if not self.knowledge_enabled:
+            return
+
+        from jarvis.knowledge.service import KnowledgeService
+
+        try:
+            result = await KnowledgeService(
+                self.session, embeddings=self.embeddings
+            ).search(
+                user_id,
+                query,
+                limit=self.budget.max_knowledge,
+                project_id=project_id,
+            )
+        except Exception as exc:
+            log.warning("knowledge_retrieval_failed", error=str(exc))
+            return
+
+        bundle.knowledge_context = result.as_prompt_block(
+            self.budget.max_knowledge_chars
+        )
+        bundle.retrieval["knowledge"] = result.describe()
+        bundle.retrieval["knowledge_ms"] = round(result.duration_ms, 2)
+        if result.hits:
+            # Documents are untrusted input. Anything retrieved from one taints
+            # the request whatever the memory retriever concluded.
+            bundle.tainted = True

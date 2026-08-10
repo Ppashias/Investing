@@ -187,12 +187,14 @@ class ExecuteStage(Stage):
         activity: ActivityService,
         retry: RetryPolicy,
         max_iterations: int = 8,
+        embeddings: Any = None,
     ) -> None:
         self.registry = registry
         self._make_executor = executor_factory
         self.activity = activity
         self.retry = retry
         self.max_iterations = max_iterations
+        self.embeddings = embeddings
 
     async def run(self, ctx: PipelineContext) -> None:
         assert ctx.routing is not None
@@ -285,6 +287,18 @@ class ExecuteStage(Stage):
                 session=ctx.session,
                 request_id=ctx.request_id,
                 conversation_id=ctx.conversation_id,
+                # Set when retrieved memory or knowledge came from untrusted
+                # content. The permission engine escalates every non-read
+                # capability on a tainted request, which is the structural
+                # defence against a document telling JARVIS what to do.
+                tainted=bool(
+                    ctx.context_bundle is not None
+                    and getattr(ctx.context_bundle, "tainted", False)
+                ),
+                extras={
+                    "embeddings": self.embeddings,
+                    "project_id": ctx.project_id,
+                },
             )
             try:
                 outcome = await executor.execute_safe(call, tool_ctx)
@@ -391,4 +405,87 @@ class PersistStage(Stage):
             latency_ms=ctx.completion.latency_ms if ctx.completion else None,
             request_id=ctx.request_id,
             meta={"warnings": ctx.warnings} if ctx.warnings else {},
+        )
+
+
+class EvaluateMemoryStage(Stage):
+    """Decide what this exchange is worth remembering (§12, §33).
+
+    Last stage, after the answer is persisted, and deliberately so: the user is
+    waiting on the reply, not on the bookkeeping, and a model asked to answer
+    *and* curate memory does both worse.
+
+    Nothing here can fail the turn. The response has already been produced; a
+    memory candidate lost to a provider hiccup is not worth turning a good
+    answer into an error.
+    """
+
+    name = "evaluate_memory"
+
+    def __init__(
+        self,
+        *,
+        router: Any = None,
+        embeddings: Any = None,
+        capture_mode: str = "ask",
+        min_importance: float = 0.45,
+        duplicate_threshold: float = 0.87,
+    ) -> None:
+        self.router = router
+        self.embeddings = embeddings
+        self.capture_mode = capture_mode
+        self.min_importance = min_importance
+        self.duplicate_threshold = duplicate_threshold
+
+    async def should_run(self, ctx: PipelineContext) -> bool:
+        return (
+            self.capture_mode != "off"
+            and self.router is not None
+            and bool(ctx.final_text)
+            and ctx.pending_confirmation is None
+        )
+
+    async def run(self, ctx: PipelineContext) -> None:
+        from jarvis.memory.evaluator import MemoryEvaluator
+
+        try:
+            result = await MemoryEvaluator(
+                ctx.session,
+                router=self.router,
+                embeddings=self.embeddings,
+                capture_mode=self.capture_mode,
+                min_importance=self.min_importance,
+                duplicate_threshold=self.duplicate_threshold,
+            ).evaluate_exchange(
+                user_id=ctx.user.id,
+                user_message=ctx.message,
+                assistant_message=ctx.final_text,
+                conversation_id=ctx.conversation_id,
+                project_id=ctx.project_id,
+                request_id=ctx.request_id,
+            )
+        except Exception as exc:
+            log.warning("memory_evaluation_failed", error=str(exc))
+            return
+
+        if result.stored or result.proposed:
+            await self.activity_record(ctx, result)
+
+    async def activity_record(self, ctx: PipelineContext, result: Any) -> None:
+        """Surface capture in the activity feed.
+
+        Memory forming quietly in the background is exactly the kind of thing a
+        user should be able to see happening.
+        """
+        from jarvis.activity.service import ActivityService
+
+        verb = "Proposed" if result.proposed else "Remembered"
+        count = len(result.proposed or result.stored)
+        await ActivityService(ctx.session).record(
+            ActivityKind.MEMORY_CAPTURED,
+            summary=f"{verb} {count} memory/memories",
+            actor="evaluator",
+            detail=result.to_dict(),
+            request_id=ctx.request_id,
+            conversation_id=ctx.conversation_id,
         )

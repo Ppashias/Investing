@@ -16,11 +16,13 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from jarvis.activity.service import ActivityBus
 from jarvis.config import Settings, get_settings
+from jarvis.context.manager import ContextBudget
 from jarvis.db.base import Database
 from jarvis.db.models import User
 from jarvis.logging import configure_logging, get_logger
 from jarvis.orchestrator.core import Orchestrator
 from jarvis.permissions.engine import seed_default_grants
+from jarvis.providers.embeddings import EmbeddingProvider, build_embedding_provider
 from jarvis.providers.registry import ProviderRegistry, build_registry
 from jarvis.providers.retry import RetryPolicy
 from jarvis.providers.router import ModelRouter
@@ -40,6 +42,7 @@ class JarvisCore:
     router: ModelRouter
     activity_bus: ActivityBus
     orchestrator: Orchestrator
+    embeddings: EmbeddingProvider
 
     # ── lifecycle ────────────────────────────────────────────────────────────
 
@@ -53,6 +56,14 @@ class JarvisCore:
         tools = build_default_registry()
         router = ModelRouter(providers, settings)
         bus = ActivityBus()
+        embeddings = build_embedding_provider(settings)
+
+        budget = ContextBudget(
+            max_memories=settings.memory_max_injected,
+            max_memory_chars=settings.memory_max_chars,
+            max_knowledge=settings.knowledge_max_injected,
+            max_knowledge_chars=settings.knowledge_max_chars,
+        )
 
         orchestrator = Orchestrator(
             registry=tools,
@@ -62,6 +73,13 @@ class JarvisCore:
             tool_timeout_seconds=settings.tool_timeout_seconds,
             max_iterations=settings.max_agent_iterations,
             confirmation_ttl_seconds=settings.confirmation_ttl_seconds,
+            embeddings=embeddings,
+            context_budget=budget,
+            memory_enabled=settings.memory_enabled,
+            knowledge_enabled=settings.knowledge_enabled,
+            memory_capture_mode=settings.memory_capture_mode,
+            memory_min_importance=settings.memory_autostore_min_importance,
+            memory_duplicate_threshold=settings.memory_duplicate_threshold,
         )
 
         return cls(
@@ -72,6 +90,7 @@ class JarvisCore:
             router=router,
             activity_bus=bus,
             orchestrator=orchestrator,
+            embeddings=embeddings,
         )
 
     async def startup(self, *, create_schema: bool = False) -> None:
@@ -136,4 +155,14 @@ class JarvisCore:
                 "names": [t.name for t in self.tools.all()],
             },
             "activity_subscribers": self.activity_bus.subscriber_count,
+            "embeddings": {
+                "provider": self.embeddings.info.key,
+                "model": self.embeddings.info.model,
+                "dimensions": self.embeddings.info.dim,
+                # The important field. False means retrieval matches wording,
+                # not meaning, and every surface says so rather than letting
+                # the user infer semantic search from the word "embeddings".
+                "semantic": self.embeddings.info.semantic,
+                "description": self.embeddings.info.description,
+            },
         }

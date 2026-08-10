@@ -27,6 +27,7 @@ from jarvis.logging import bind_context, get_logger, reset_context, timed
 from jarvis.orchestrator.pipeline import Pipeline, PipelineContext
 from jarvis.orchestrator.stages import (
     AnalyseIntentStage,
+    EvaluateMemoryStage,
     ExecuteStage,
     LoadContextStage,
     PersistStage,
@@ -93,6 +94,13 @@ class Orchestrator:
         tool_timeout_seconds: float = 30.0,
         max_iterations: int = 8,
         confirmation_ttl_seconds: int = 900,
+        embeddings: Any = None,
+        context_budget: Any = None,
+        memory_enabled: bool = True,
+        knowledge_enabled: bool = True,
+        memory_capture_mode: str = "ask",
+        memory_min_importance: float = 0.45,
+        memory_duplicate_threshold: float = 0.87,
     ) -> None:
         self.registry = registry
         self.router = router
@@ -101,11 +109,27 @@ class Orchestrator:
         self.tool_timeout_seconds = tool_timeout_seconds
         self.max_iterations = max_iterations
         self.confirmation_ttl_seconds = confirmation_ttl_seconds
+        self.embeddings = embeddings
+        self.context_budget = context_budget
+        self.memory_enabled = memory_enabled
+        self.knowledge_enabled = knowledge_enabled
+        self.memory_capture_mode = memory_capture_mode
+        self.memory_min_importance = memory_min_importance
+        self.memory_duplicate_threshold = memory_duplicate_threshold
 
     # ── wiring ───────────────────────────────────────────────────────────────
 
     def _activity(self, session: AsyncSession) -> ActivityService:
         return ActivityService(session, self.activity_bus)
+
+    def _make_context_manager(self, session: AsyncSession) -> ContextManager:
+        return ContextManager(
+            session,
+            self.context_budget,
+            embeddings=self.embeddings,
+            memory_enabled=self.memory_enabled,
+            knowledge_enabled=self.knowledge_enabled,
+        )
 
     def _make_executor(self, session: AsyncSession) -> ToolExecutor:
         return ToolExecutor(
@@ -123,7 +147,7 @@ class Orchestrator:
         return Pipeline(
             stages=[
                 ValidateRequestStage(),
-                LoadContextStage(lambda s: ContextManager(s)),
+                LoadContextStage(self._make_context_manager),
                 AnalyseIntentStage(),
                 PlanStage(self.router, self.registry),
                 ExecuteStage(
@@ -132,9 +156,19 @@ class Orchestrator:
                     activity=activity,
                     retry=self.retry,
                     max_iterations=self.max_iterations,
+                    embeddings=self.embeddings,
                 ),
                 ValidateResultStage(),
                 PersistStage(),
+                # After persistence on purpose: the user is waiting on the
+                # answer, not on the bookkeeping (§33).
+                EvaluateMemoryStage(
+                    router=self.router,
+                    embeddings=self.embeddings,
+                    capture_mode=self.memory_capture_mode,
+                    min_importance=self.memory_min_importance,
+                    duplicate_threshold=self.memory_duplicate_threshold,
+                ),
             ],
             activity=activity,
         )

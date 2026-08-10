@@ -138,7 +138,7 @@ async def test_tools_are_offered_to_the_provider(core: JarvisCore,
                                                  stub: StubProvider) -> None:
     stub.responses = [text_result("ok")]
     await _run(core, "Add a task please")
-    assert {t.name for t in stub.requests[0].tools} == {
+    assert {t.name for t in stub.requests[0].tools} >= {
         "get_current_time", "system_status", "create_task", "list_tasks", "update_task"
     }
 

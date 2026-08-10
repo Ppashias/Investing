@@ -103,9 +103,19 @@ class SystemPromptBuilder:
             prompt.add(
                 PromptBlock(
                     id="memory",
-                    title="Relevant memory",
-                    content=context.memory_context,
+                    title="What you remember",
+                    content=identity.MEMORY_FRAMING + "\n\n" + context.memory_context,
                     order=BlockOrder.MEMORY,
+                    cacheable=False,
+                )
+            )
+        if context.knowledge_context:
+            prompt.add(
+                PromptBlock(
+                    id="knowledge",
+                    title="Reference material",
+                    content=identity.KNOWLEDGE_FRAMING + "\n\n" + context.knowledge_context,
+                    order=BlockOrder.KNOWLEDGE,
                     cacheable=False,
                 )
             )

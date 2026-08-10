@@ -152,15 +152,17 @@ class ToolRegistry:
 
 
 def build_default_registry() -> ToolRegistry:
-    """The Phase 1 tool set.
+    """The Phase 1 + 2 tool set.
 
-    Deliberately small and safe: enough to prove the orchestration path
-    end-to-end without any tool that can damage anything. Filesystem, browser,
-    shell, and screen tools arrive in Phases 3–5 behind the same interface.
+    Still deliberately safe: nothing here can damage anything outside JARVIS's
+    own store, and the one bulk operation is marked irreversible so the
+    permission engine floors it to ASK. Filesystem, browser, shell, and screen
+    tools arrive in Phases 3-5 behind the same interface.
     """
-    from jarvis.tools.builtin import system_tools, task_tools
+    from jarvis.tools.builtin import memory_tools, system_tools, task_tools
 
     registry = ToolRegistry()
     registry.register_all(system_tools.TOOLS)
     registry.register_all(task_tools.TOOLS)
+    registry.register_all(memory_tools.TOOLS)
     return registry
