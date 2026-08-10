@@ -367,6 +367,21 @@ class VaultTransport:
                 f"{note_path} does not exist",
                 f"There is no note at {note_path} in this vault.",
             )
+        if path.suffix.lower() not in NOTE_SUFFIXES:
+            # A vault holds attachments as well as notes — images, PDFs,
+            # audio, whatever was dragged into it. Without this, reading one
+            # decoded its bytes as UTF-8 with errors="replace" and handed the
+            # caller a page of replacement characters *presented as the note's
+            # content*. Silently returning mojibake is worse than failing:
+            # a model shown that has no way to tell it apart from a note the
+            # user actually wrote badly. JARVIS does not read attachments; it
+            # now says so instead of pretending.
+            raise VaultError(
+                f"{note_path} has suffix {path.suffix!r}",
+                f"{note_path} is an attachment, not a Markdown note. JARVIS "
+                "reads and writes notes (.md); it does not open images, PDFs "
+                "or other attachments in the vault.",
+            )
         stat = path.stat()
         if stat.st_size > MAX_NOTE_BYTES:
             raise VaultError(

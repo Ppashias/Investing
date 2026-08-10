@@ -41,7 +41,8 @@ def test_default_registry_has_expected_tools() -> None:
         "search_knowledge",
         # Phase 2.5
         "search_obsidian", "read_obsidian_note", "list_obsidian_notes",
-        "create_obsidian_note", "update_obsidian_note", "obsidian_status",
+        "obsidian_note_links", "create_obsidian_note", "update_obsidian_note",
+        "obsidian_status",
         # Phase 3
         "observe_screen", "list_windows", "click", "scroll", "type_text",
         "press_key", "open_application", "read_file", "write_file",

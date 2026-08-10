@@ -5,7 +5,14 @@
     "Read my architecture note."     → read_obsidian_note
     "Save this to Obsidian."         → create_obsidian_note
     "Update my architecture note."   → update_obsidian_note
+    "What links to this note?"       → obsidian_note_links
     "Show me what I wrote about X."  → search_obsidian → read_obsidian_note
+
+Six read/write operations, and deliberately not the rest: the vault can also
+delete, move, sync and resolve edit conflicts, and none of those is an agent
+tool. ``docs/jarvis/05-obsidian-capability-decisions.md`` gives the reasoning
+per capability; the short version is that an irreversible operation should
+need a human to go and perform it, not a human to fail to stop it.
 
 Every one of these performs a real vault operation. None returns a
 confirmation it did not earn: a create that was refused says it was refused,
@@ -231,6 +238,63 @@ async def list_obsidian_notes(
     )
 
 
+@tool(
+    name="obsidian_note_links",
+    description=(
+        "Show which notes a note links to, and which notes link back to it. "
+        "Use this to follow the structure of the vault — 'what else did I "
+        "write about this?', 'what references this note?'. Reading a note "
+        "shows its outgoing links; only this shows the incoming ones."
+    ),
+    parameters={
+        "type": "object",
+        "properties": {
+            "path": {"type": "string", "minLength": 1},
+        },
+        "required": ["path"],
+        "additionalProperties": False,
+    },
+    capability=Capability.READ,
+    category="obsidian",
+)
+async def obsidian_note_links(*, ctx: ToolContext, path: str) -> ToolResult:
+    """Backlinks are the one read the agent could not perform by other means.
+
+    Outgoing links are in the note's own text, so reading it is enough.
+    Incoming links are a property of every *other* note, and no combination of
+    search and read reconstructs them reliably. That made this an accidental
+    omission rather than a withheld capability, so it is exposed — read-only,
+    through the same guard as every other read.
+    """
+    service = await _service(ctx)
+    provider = await service.provider()
+    if provider is None:
+        return ToolResult.error(_UNCONNECTED, connected=False)
+
+    await service.guard("read", target=path, tainted=ctx.tainted, actor="agent")
+    try:
+        found = await provider.links(path)
+    except VaultError as exc:
+        return ToolResult.error(exc.user_message, path=path)
+
+    outgoing, backlinks = found["links"], found["backlinks"]
+    await service.audit("read", status="OK", target=path, actor="agent",
+                        summary=f"Read links for Obsidian note {path}")
+
+    def _section(label: str, paths: list[str]) -> str:
+        if not paths:
+            return f"{label}: none."
+        return f"{label}:\n" + "\n".join(f"- {p}" for p in paths)
+
+    return ToolResult.ok(
+        f"{path}\n\n{_section('Links to', outgoing)}\n\n"
+        f"{_section('Linked from', backlinks)}",
+        path=path,
+        links=outgoing,
+        backlinks=backlinks,
+    )
+
+
 # ── writing ──────────────────────────────────────────────────────────────────
 
 
@@ -281,12 +345,10 @@ async def create_obsidian_note(
         return ToolResult.error(_UNCONNECTED, connected=False)
 
     target = path or f"{title}.md"
-    # Raises ConfirmationRequiredError on ASK — the tool executor suspends the
-    # turn on it, so the approval is the user's and the note is not written
-    # until they give it.
     # The executor has already obtained the user's approval for this exact
-    # call — the tool declares requires_confirmation. This checks the operator
-    # switches, the engine and taint, and does not ask again.
+    # call — the tool declares requires_confirmation, and the executor suspends
+    # the turn on it before the handler ever runs. This checks the operator
+    # switches, the engine and taint, and does not ask a second time.
     await service.guard(
         "create", target=target, tainted=ctx.tainted, actor="agent",
         arguments={"title": title},
@@ -376,10 +438,12 @@ async def update_obsidian_note(
 @tool(
     name="obsidian_status",
     description=(
-        "Report whether an Obsidian vault is connected, which vault, how many "
-        "notes are indexed, and what JARVIS is allowed to do with it. Use "
-        "this when the user asks about their Obsidian connection, or when an "
-        "Obsidian operation failed and you need to say why."
+        "Report whether an Obsidian vault is connected, which vault, what "
+        "JARVIS is allowed to do with it, and when the search index was last "
+        "synced from the vault. Use this when the user asks about their "
+        "Obsidian connection, when an Obsidian operation failed and you need "
+        "to say why, or when a search returned nothing and the index may "
+        "simply be out of date."
     ),
     parameters={"type": "object", "properties": {}, "additionalProperties": False},
     capability=Capability.READ,
@@ -398,18 +462,67 @@ async def obsidian_status(*, ctx: ToolContext) -> ToolResult:
         )
 
     report = await provider.status()
+    if not report.connected:
+        return ToolResult.ok(
+            f"The vault '{provider.transport.name}' is not reachable: "
+            f"{report.detail}",
+            connected=False,
+            vault=provider.transport.name,
+            capabilities=[c.value for c in report.capabilities],
+        )
+
     capabilities = ", ".join(c.value.lower() for c in report.capabilities)
     return ToolResult.ok(
-        (
-            f"Connected to vault '{provider.transport.name}'. {report.detail}. "
-            f"Permitted: {capabilities}."
-            if report.connected
-            else f"The vault '{provider.transport.name}' is not reachable: "
-                 f"{report.detail}"
-        ),
-        connected=report.connected,
+        f"Connected to vault '{provider.transport.name}'. {report.detail}. "
+        f"Permitted: {capabilities}. {_staleness(report)}",
+        connected=True,
         vault=provider.transport.name,
         capabilities=[c.value for c in report.capabilities],
+        last_synced_at=(
+            report.last_synced_at.isoformat() if report.last_synced_at else None
+        ),
+        indexed_documents=report.document_count,
+    )
+
+
+def _staleness(report: Any) -> str:
+    """Say how old the search index is, in words the model can repeat.
+
+    JARVIS never syncs on its own — no watcher, no timer, no sync triggered as
+    a side effect of being asked something (see
+    ``docs/jarvis/05-obsidian-capability-decisions.md``). That is a deliberate
+    choice, and its cost is that a search can miss a note the user wrote two
+    minutes ago. The cost is only acceptable if the staleness is *visible*, so
+    the one thing this must never do is round "last synced four days ago" down
+    to silence.
+    """
+    if report.last_synced_at is None:
+        return (
+            "The search index has never been synced from this vault, so "
+            "searching JARVIS's index may find nothing even where notes "
+            "exist; reading and listing go straight to the vault and are "
+            "always current. Syncing is a manual action in the Obsidian panel."
+        )
+
+    from jarvis.db.base import utcnow
+
+    synced = report.last_synced_at
+    if synced.tzinfo is None:
+        from datetime import UTC
+
+        synced = synced.replace(tzinfo=UTC)
+    hours = (utcnow() - synced).total_seconds() / 3600
+    if hours < 1:
+        age = "less than an hour ago"
+    elif hours < 48:
+        age = f"about {round(hours)} hour(s) ago"
+    else:
+        age = f"about {round(hours / 24)} day(s) ago"
+    return (
+        f"The search index was last synced {age} ({report.document_count} "
+        "notes indexed); anything written or edited in Obsidian since then is "
+        "not in it. JARVIS does not sync by itself — the user syncs from the "
+        "Obsidian panel."
     )
 
 
@@ -441,6 +554,7 @@ OBSIDIAN_TOOLS = [
     search_obsidian,
     read_obsidian_note,
     list_obsidian_notes,
+    obsidian_note_links,
     create_obsidian_note,
     update_obsidian_note,
     obsidian_status,

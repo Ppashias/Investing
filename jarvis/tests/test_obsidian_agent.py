@@ -593,3 +593,226 @@ async def test_path_containment_holds_at_the_tool_layer(core, vault: Path) -> No
     )
     assert outcome.result.is_error is True
     assert "outside the vault" in outcome.result.content
+
+
+# ── §5 capability surface ────────────────────────────────────────────────────
+#
+# The vault can do more than the agent can ask for. Every omission below is a
+# decision recorded in docs/jarvis/04-obsidian-capability-decisions.md, and
+# these tests are what stop a decision from quietly reversing itself — a tool
+# added later without going back to that document fails here first.
+
+
+def test_the_agent_surface_is_exactly_what_was_decided() -> None:
+    """The registry advertises six Obsidian tools and no others.
+
+    Named individually rather than counted, because a count passes when one
+    tool is swapped for another and the point is *which* operations the model
+    can reach.
+    """
+    from jarvis.tools.registry import build_default_registry
+
+    names = {t.name for t in build_default_registry().all() if t.category == "obsidian"}
+    assert names == {
+        "search_obsidian",
+        "read_obsidian_note",
+        "list_obsidian_notes",
+        "obsidian_note_links",
+        "create_obsidian_note",
+        "update_obsidian_note",
+        "obsidian_status",
+    }
+
+
+@pytest.mark.parametrize(
+    "absent",
+    [
+        "delete_obsidian_note",
+        "move_obsidian_note",
+        "rename_obsidian_note",
+        "sync_obsidian",
+        "resolve_obsidian_conflict",
+        "disconnect_obsidian",
+    ],
+)
+def test_destructive_vault_operations_have_no_agent_tool(absent: str) -> None:
+    """Implemented in the provider, reachable over the API, not by the model.
+
+    Deleting, moving and conflict resolution all destroy something a human
+    wrote: a file, a link graph, or the losing side of an edit. Each is
+    available to the user through the Obsidian panel, where they are choosing
+    to do it. None is available to a model that inferred it from a sentence.
+    """
+    from jarvis.tools.registry import build_default_registry
+
+    assert absent not in {t.name for t in build_default_registry().all()}
+
+
+def test_the_tools_the_agent_does_have_cannot_delete() -> None:
+    """No Obsidian tool declares a capability above WRITE.
+
+    The permission engine treats DELETE as its own capability; if a tool ever
+    declared it, a WRITE grant would no longer describe the vault's exposure.
+    """
+    from jarvis.db.models import Capability
+    from jarvis.tools.registry import build_default_registry
+
+    obsidian = [t for t in build_default_registry().all() if t.category == "obsidian"]
+    assert {t.capability for t in obsidian} <= {Capability.READ, Capability.WRITE}
+
+
+async def test_backlinks_find_what_reading_a_note_cannot(core, vault: Path) -> None:
+    """The reason this capability was exposed, stated as a test.
+
+    ``Index.md`` links to ``Rust``. Nothing in ``Notes/Rust.md`` records that,
+    so no amount of reading it reveals the reference — only a scan does.
+    """
+    await _connect(core, vault)
+    outcome = await _execute(core, "obsidian_note_links", {"path": "Notes/Rust.md"})
+
+    assert outcome.result.is_error is False
+    assert outcome.result.data["backlinks"] == ["Index.md"]
+    assert "Index.md" in outcome.result.content
+
+    read = await _execute(core, "read_obsidian_note", {"path": "Notes/Rust.md"})
+    assert "Index.md" not in read.result.content
+
+
+async def test_backlinks_are_audited_as_a_read(core, vault: Path) -> None:
+    await _connect(core, vault)
+    await _execute(core, "obsidian_note_links", {"path": "Notes/Rust.md"})
+    kinds = await _activity_kinds(core)
+    assert ("OBSIDIAN_ACTION", "read") in kinds
+
+
+async def test_backlinks_report_no_vault_rather_than_failing(core) -> None:
+    outcome = await _execute(core, "obsidian_note_links", {"path": "Notes/Rust.md"})
+    assert outcome.result.is_error is True
+    assert outcome.result.data["connected"] is False
+
+
+async def test_backlinks_cannot_escape_the_vault(core, vault: Path) -> None:
+    await _connect(core, vault)
+    outcome = await _execute(
+        core, "obsidian_note_links", {"path": "../../../etc/passwd"}
+    )
+    assert outcome.result.is_error is True
+    assert "outside the vault" in outcome.result.content
+
+
+# ── §7 sync staleness ────────────────────────────────────────────────────────
+
+
+async def test_status_says_the_index_has_never_been_synced(core, vault: Path) -> None:
+    """Never-synced is a fact the model must be able to state.
+
+    A search against an empty index returns nothing, which is indistinguishable
+    from "you have no notes about that" unless something says otherwise.
+    """
+    await _connect(core, vault)
+    outcome = await _execute(core, "obsidian_status", {})
+
+    assert outcome.result.is_error is False
+    assert outcome.result.data["last_synced_at"] is None
+    assert "never been synced" in outcome.result.content
+    assert "manual" in outcome.result.content
+
+
+async def test_status_reports_how_stale_the_index_is(core, vault: Path) -> None:
+    """After a sync, the age is reported — and so is the fact it is manual."""
+    from datetime import timedelta
+
+    from jarvis.db.base import utcnow
+
+    await _connect(core, vault)
+    async with core.database.session_factory() as session:
+        user = await JarvisCore.ensure_default_user(session)
+        service = ObsidianService(session, user.id)
+        row = await service.row()
+        row.last_synced_at = utcnow() - timedelta(days=3)
+        row.document_count = 2
+        await session.commit()
+
+    outcome = await _execute(core, "obsidian_status", {})
+    assert outcome.result.data["last_synced_at"] is not None
+    assert outcome.result.data["indexed_documents"] == 2
+    assert "3 day(s) ago" in outcome.result.content
+    assert "does not sync by itself" in outcome.result.content
+
+
+async def test_nothing_syncs_as_a_side_effect_of_reading(core, vault: Path) -> None:
+    """Reading the vault must not quietly start an ingestion.
+
+    A sync that happened because the user asked a question would be a
+    background writer they did not authorise, and it would make the staleness
+    reported above a lie.
+    """
+    await _connect(core, vault)
+    await _execute(core, "read_obsidian_note", {"path": "Notes/Rust.md"})
+    await _execute(core, "search_obsidian", {"query": "ownership"})
+    await _execute(core, "list_obsidian_notes", {})
+
+    async with core.database.session_factory() as session:
+        user = await JarvisCore.ensure_default_user(session)
+        row = await ObsidianService(session, user.id).row()
+        assert row.last_synced_at is None
+        assert row.document_count == 0
+
+
+# ── §7 attachments ───────────────────────────────────────────────────────────
+
+
+async def test_an_attachment_is_refused_not_decoded(core, vault: Path) -> None:
+    """Reading a PNG must say "attachment", not return its bytes as prose.
+
+    Before this, the transport decoded any file in the vault as UTF-8 with
+    ``errors="replace"``, so asking to read an image produced a page of U+FFFD
+    characters labelled as the note's content — a fabricated read the model had
+    no way to recognise as one.
+    """
+    (vault / "Attachments").mkdir()
+    (vault / "Attachments" / "diagram.png").write_bytes(
+        b"\x89PNG\r\n\x1a\n\x00\x00\x00\rIHDR\xff\xfe\xfd"
+    )
+    await _connect(core, vault)
+
+    outcome = await _execute(
+        core, "read_obsidian_note", {"path": "Attachments/diagram.png"}
+    )
+    assert outcome.result.is_error is True
+    assert "attachment" in outcome.result.content
+    assert "�" not in outcome.result.content
+
+
+async def test_attachments_are_absent_from_listings_and_search(
+    core, vault: Path
+) -> None:
+    """Skipping them is intentional; this pins it so it cannot drift."""
+    (vault / "Attachments").mkdir()
+    (vault / "Attachments" / "diagram.png").write_bytes(b"\x89PNG\r\n\x1a\n")
+    (vault / "Attachments" / "notes.pdf").write_bytes(b"%PDF-1.7\n")
+    await _connect(core, vault)
+
+    listed = await _execute(core, "list_obsidian_notes", {})
+    assert listed.result.data["paths"] == sorted(["Index.md", "Notes/Rust.md"])
+
+    status = await _execute(core, "obsidian_status", {})
+    assert "2 notes" in status.result.content
+
+
+# ── §6 audit scope ───────────────────────────────────────────────────────────
+
+
+def test_the_activity_log_has_no_user_column() -> None:
+    """Why /api/obsidian/audit is not user-scoped, stated as a fact about the
+    schema rather than an opinion about the route.
+
+    The audit query cannot filter by user because there is nothing to filter
+    on: ``activity_logs`` has no ``user_id``. JARVIS is single-user by
+    construction (``ensure_default_user`` takes the first row), so the log
+    describes one person's system. If a second subject ever exists, this test
+    fails — which is the point, because the route would then be leaking.
+    """
+    from jarvis.db.models import ActivityLog
+
+    assert "user_id" not in ActivityLog.__table__.columns
