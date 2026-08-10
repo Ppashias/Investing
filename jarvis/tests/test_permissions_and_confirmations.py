@@ -306,6 +306,30 @@ async def test_approval_is_single_use(session, user) -> None:
     assert await service.find_approval(user.id, "risky_tool", {"path": "/tmp/x"}) is None
 
 
+async def test_stale_approval_stops_authorising(session, user) -> None:
+    """An approval the user never spent must not become a standing grant.
+
+    Approve, walk away, come back much later: the identical action has to ask
+    again rather than executing silently.
+    """
+    service = ConfirmationService(session, ttl_seconds=900, approval_ttl_seconds=0)
+    created = await service.request(_request(user.id))
+    await service.decide(created.id, approved=True)
+
+    assert await service.find_approval(user.id, "risky_tool", {"path": "/tmp/x"}) is None
+    assert created.status is ConfirmationStatus.EXPIRED
+
+
+async def test_fresh_approval_is_still_honoured(session, user) -> None:
+    """The staleness check must not break the normal approve-then-resume flow."""
+    service = ConfirmationService(session, ttl_seconds=900)
+    created = await service.request(_request(user.id))
+    await service.decide(created.id, approved=True)
+
+    found = await service.find_approval(user.id, "risky_tool", {"path": "/tmp/x"})
+    assert found is not None and found.id == created.id
+
+
 async def test_denied_confirmation_yields_no_approval(session, user) -> None:
     service = ConfirmationService(session)
     created = await service.request(_request(user.id))

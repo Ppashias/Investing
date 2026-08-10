@@ -112,8 +112,9 @@ twice first. Phase 10's autonomous retry loop depends on this existing now.
 **Confirmations resume rather than block.** When a tool needs approval, the turn
 suspends and the confirmation is persisted. Approving it later — after a
 restart, from another device — resumes the work. Approvals are fingerprint-bound
-to the exact action and single-use, so an approval for one thing cannot
-authorise another.
+to the exact action, single-use, and time-bounded, so an approval for one thing
+cannot authorise another and an approval you walked away from does not quietly
+become a standing grant.
 
 **Nothing outside `jarvis/providers/` imports a vendor SDK.**
 
@@ -190,7 +191,7 @@ automatically — there is no way to opt out.
 ## Development
 
 ```bash
-./.venv/bin/python -m pytest            # 124 tests
+./.venv/bin/python -m pytest            # 126 tests
 ./.venv/bin/alembic revision --autogenerate -m "what changed"
 ./.venv/bin/alembic upgrade head
 ```
@@ -217,4 +218,7 @@ Phase 1 stops here on purpose. These are absent from the UI rather than stubbed:
   token-level streaming through the pipeline is Phase 2 work.
 - **Background jobs and scheduling** (Phase 10)
 
-See `docs/jarvis/00-architecture-audit.md` for the full roadmap.
+See `docs/jarvis/00-architecture-audit.md` for the full roadmap, and
+`docs/jarvis/01-phase1-security-review.md` for the Phase 1 security review —
+including the three findings that were accepted or deferred rather than fixed,
+and the obligations Phase 3 and Phase 5 inherit.

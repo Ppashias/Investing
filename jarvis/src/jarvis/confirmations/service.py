@@ -20,7 +20,12 @@ Phase 10 runs long autonomous work.
 **Approvals are bound to the exact action.** The action fingerprint is a hash
 of the tool name plus its canonicalised arguments, so an approval for
 "delete file A" cannot be replayed to authorise "delete file B". Approvals are
-also single-use.
+also single-use, and they go stale: an approval that was never consumed stops
+authorising anything once :attr:`ConfirmationService.approval_ttl_seconds` has
+passed since the decision. Without that, an approval the user gave and then
+abandoned — the turn errored, the tab closed — would still silently authorise
+the identical action weeks later, which is exactly the kind of latent grant
+prompt injection looks for.
 """
 
 from __future__ import annotations
@@ -69,9 +74,21 @@ class ConfirmationRequest:
 
 
 class ConfirmationService:
-    def __init__(self, session: AsyncSession, *, ttl_seconds: int = 900) -> None:
+    def __init__(
+        self,
+        session: AsyncSession,
+        *,
+        ttl_seconds: int = 900,
+        approval_ttl_seconds: int | None = None,
+    ) -> None:
         self.session = session
+        #: How long a *pending* request stays answerable.
         self.ttl_seconds = ttl_seconds
+        #: How long an *approved but unconsumed* decision keeps authorising its
+        #: action. Defaults to the same window as the request itself.
+        self.approval_ttl_seconds = (
+            ttl_seconds if approval_ttl_seconds is None else approval_ttl_seconds
+        )
 
     # ── creation ─────────────────────────────────────────────────────────────
 
@@ -144,7 +161,13 @@ class ConfirmationService:
     async def find_approval(
         self, user_id: str, tool_name: str, arguments: dict[str, Any]
     ) -> Confirmation | None:
-        """An unconsumed approval matching exactly this action, if one exists."""
+        """A fresh, unconsumed approval matching exactly this action.
+
+        Three conditions, all necessary: the fingerprint matches (so an
+        approval cannot be transplanted onto a different action), it has not
+        already been used (single-use), and it is not stale (an approval the
+        user walked away from does not accumulate into a standing grant).
+        """
         fingerprint = action_fingerprint(tool_name, arguments)
         stmt = (
             select(Confirmation)
@@ -159,8 +182,21 @@ class ConfirmationService:
                 continue
             if row.action.get("consumed"):
                 continue
+            if self._approval_is_stale(row):
+                row.status = ConfirmationStatus.EXPIRED
+                log.info("approval_expired_unused", confirmation_id=row.id)
+                continue
             return row
         return None
+
+    def _approval_is_stale(self, confirmation: Confirmation) -> bool:
+        decided = confirmation.decided_at
+        if decided is None:  # approved without a timestamp — treat as unusable
+            return True
+        if decided.tzinfo is None:
+            decided = decided.replace(tzinfo=timezone.utc)
+        age = (datetime.now(timezone.utc) - decided).total_seconds()
+        return age > self.approval_ttl_seconds
 
     async def consume(self, confirmation: Confirmation) -> None:
         """Mark an approval used, so it authorises exactly one execution."""

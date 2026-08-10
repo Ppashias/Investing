@@ -43,7 +43,7 @@ from jarvis.errors import (
     ToolInputError,
     ToolTimeoutError,
 )
-from jarvis.logging import get_logger, timed
+from jarvis.logging import get_logger, scrub_text, timed
 from jarvis.permissions.engine import PermissionEngine, PermissionRequest
 from jarvis.tools.base import Tool, ToolContext, ToolResult
 from jarvis.tools.registry import ToolRegistry
@@ -147,9 +147,14 @@ class ToolExecutor:
                 duration_ms=0.0,
             )
         except JarvisError as exc:
+            # ``message`` is the internal form and can carry text from deeper in
+            # the stack — a provider error body, an exception repr. It goes to
+            # the model here (the model needs to know *why* to retry), so it is
+            # scrubbed on the way, the same way it would be on the way to a log.
+            # The HTTP path never sees it at all; see ``JarvisError.to_dict``.
             return ToolOutcome(
                 call=call,
-                result=ToolResult.error(f"{exc.code}: {exc.message}"),
+                result=ToolResult.error(scrub_text(f"{exc.code}: {exc.message}")),
                 execution_id="",
                 decision=PermissionMode.ALLOW,
                 duration_ms=0.0,
@@ -343,7 +348,7 @@ class ToolExecutor:
         if record.status is not ExecutionStatus.AWAITING_CONFIRMATION:
             record.status = ExecutionStatus.FAILED
             record.error_code = exc.code
-            record.error_message = exc.message[:2000]
+            record.error_message = scrub_text(exc.message)[:2000]
             record.finished_at = utcnow()
         try:
             await self.session.flush()
