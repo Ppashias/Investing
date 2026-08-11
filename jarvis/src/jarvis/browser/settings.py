@@ -69,6 +69,17 @@ class BrowserSettings:
     #: what that boundary means.
     storage_dir: Path | None = None
 
+    #: Reach services on this machine. Off by default: a browser that can open
+    #: ``http://localhost:8080`` can reach every development server, admin
+    #: console and database UI the user happens to be running, none of which
+    #: they granted anything to.
+    allow_localhost: bool = False
+
+    #: Reach RFC1918 and link-local addresses. Separate from the switch above,
+    #: because "let JARVIS see my dev server" and "let JARVIS probe my LAN" are
+    #: different requests and only one of them is usually meant.
+    allow_private_networks: bool = False
+
     #: Extra Chromium flags. Needed on machines where the sandbox cannot be
     #: used (unprivileged containers), and deliberately not defaulted to
     #: ``--no-sandbox`` — turning the browser's own sandbox off is not

@@ -154,13 +154,15 @@ class ToolRegistry:
 def build_default_registry() -> ToolRegistry:
     """The Phase 1-3 tool set.
 
-    Three groups with genuinely different reach: the Phase 1-2 tools cannot
+    Four groups with genuinely different reach: the Phase 1-2 tools cannot
     touch anything outside JARVIS's own store, the Obsidian tools write to the
-    user's notes, and the computer tools operate the machine. Each group routes
-    through its own chokepoint — the tool executor for all of them, plus
-    ``ObsidianService`` and ``ComputerService`` for the two that leave.
+    user's notes, the computer tools operate the machine, and the browser tools
+    reach the internet. Each group routes through its own chokepoint — the tool
+    executor for all of them, plus ``ObsidianService``, ``ComputerService`` and
+    ``BrowserPolicy``/``UrlPolicy`` for the three that leave.
     """
     from jarvis.tools.builtin import (
+        browser_tools,
         computer_tools,
         memory_tools,
         obsidian_tools,
@@ -174,4 +176,5 @@ def build_default_registry() -> ToolRegistry:
     registry.register_all(memory_tools.TOOLS)
     registry.register_all(obsidian_tools.OBSIDIAN_TOOLS)
     registry.register_all(computer_tools.TOOLS)
+    registry.register_all(browser_tools.TOOLS)
     return registry

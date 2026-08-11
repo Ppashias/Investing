@@ -102,6 +102,7 @@ class Orchestrator:
         memory_min_importance: float = 0.45,
         memory_duplicate_threshold: float = 0.87,
         computer: Any = None,
+        browser: Any = None,
     ) -> None:
         self.registry = registry
         self.router = router
@@ -118,6 +119,7 @@ class Orchestrator:
         self.memory_min_importance = memory_min_importance
         self.memory_duplicate_threshold = memory_duplicate_threshold
         self.computer = computer
+        self.browser = browser
 
     # ── wiring ───────────────────────────────────────────────────────────────
 
@@ -151,7 +153,7 @@ class Orchestrator:
                 ValidateRequestStage(),
                 LoadContextStage(self._make_context_manager),
                 AnalyseIntentStage(),
-                PlanStage(self.router, self.registry, self.computer),
+                PlanStage(self.router, self.registry, self.computer, self.browser),
                 ExecuteStage(
                     registry=self.registry,
                     executor_factory=self._make_executor,
@@ -160,6 +162,7 @@ class Orchestrator:
                     max_iterations=self.max_iterations,
                     embeddings=self.embeddings,
                     computer=self.computer,
+                    browser=self.browser,
                 ),
                 ValidateResultStage(),
                 PersistStage(),

@@ -184,6 +184,10 @@ class Settings(BaseSettings):
     #: is ephemeral: cookies and logins die with the session. Setting it is an
     #: explicit decision to let JARVIS stay logged in between sessions.
     browser_storage_dir: Path | None = None
+    #: Let the browser reach this machine, and the private network. Both off by
+    #: default and deliberately separate; see BrowserSettings for why.
+    browser_allow_localhost: bool = False
+    browser_allow_private_networks: bool = False
     #: Extra Chromium flags. ``--no-sandbox`` belongs here on machines that
     #: cannot use the browser's sandbox, and deliberately is not a default.
     browser_launch_args: list[str] = Field(default_factory=list)
@@ -269,6 +273,8 @@ class Settings(BaseSettings):
                 # business and this dict goes over the API.
                 "persists_storage": self.browser_storage_dir is not None,
                 "executable_configured": self.browser_executable_path is not None,
+                "allow_localhost": self.browser_allow_localhost,
+                "allow_private_networks": self.browser_allow_private_networks,
             },
         }
 

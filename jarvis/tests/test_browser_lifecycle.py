@@ -961,10 +961,24 @@ def test_the_hardening_did_not_touch_the_security_subsystems() -> None:
             assert forbidden not in source, f"{forbidden} in {name}"
 
 
-def test_no_browser_tool_has_been_registered() -> None:
-    """Step 5 is not started, and the registry is where that would show."""
+def test_the_browser_lifecycle_is_not_exposed_as_a_tool() -> None:
+    """The successor to "Step 5 has not started", now that it has.
+
+    That assertion retired when the tools arrived. What it was standing in for
+    is still live and belongs here rather than with the tools: the *lifecycle*
+    is JARVIS's, not the model's. A model that could launch or shut down the
+    browser could end it in the middle of somebody else's work, and could
+    relaunch to get a fresh context after being refused on the current one.
+
+    Closing a single page is the one lifecycle verb the model gets, and it
+    reaches exactly one page. The bounded tool surface itself is pinned by
+    ``test_browser_tools.py::test_the_nine_tools_are_registered_and_no_more``.
+    """
     from jarvis.tools.registry import build_default_registry
 
     names = {t.name for t in build_default_registry().all()}
-    assert not {n for n in names if n.startswith("browser")}
-    assert not {t for t in build_default_registry().all() if t.category == "browser"}
+    for forbidden in ("browser_launch", "browser_start", "browser_shutdown",
+                      "browser_restart", "browser_close", "browser_quit",
+                      "browser_new_context", "browser_clear_cookies"):
+        assert forbidden not in names, forbidden
+    assert "browser_close_page" in names

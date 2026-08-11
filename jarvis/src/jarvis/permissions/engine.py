@@ -283,6 +283,19 @@ async def seed_default_grants(session: AsyncSession, user_id: str) -> list[Permi
         PermissionGrant(
             user_id=user_id,
             capability=Capability.WRITE,
+            resource_scope="tool:browser_close_page",
+            mode=PermissionMode.ALLOW,
+            conditions={"max_risk": RiskLevel.LOW.value},
+            note=(
+                "Closing a browser page JARVIS itself opened releases JARVIS's "
+                "own resource and touches nothing of the user's. Asking about "
+                "it would teach them to approve without reading, which is what "
+                "makes the approvals that matter worthless."
+            ),
+        ),
+        PermissionGrant(
+            user_id=user_id,
+            capability=Capability.WRITE,
             resource_scope="tool:update_task",
             mode=PermissionMode.ALLOW,
             conditions={"max_risk": RiskLevel.LOW.value},

@@ -1,6 +1,6 @@
-# Phase 4 Step 4 — the browser control plane
+# Phase 4 — the browser control plane and tool surface
 
-**Status:** implemented. No browser tool exists; Step 5 has not begun.
+**Status:** implemented, Steps 4 and 5. The tool surface exists; see the Step 5 section at the end.
 
 Five boundaries, all built before the tools that will use them. The ordering is
 deliberate: a boundary retrofitted around a working tool tends to be shaped by
@@ -206,3 +206,108 @@ relaxed.
 - **Nothing enforces the ordering** URL-check → origin → permission → action.
   It cannot be enforced until there is an action; Step 5 must wire it, and the
   no-navigation test is the guard rail that makes skipping it visible.
+
+---
+
+# Step 5 — the tool surface
+
+**Status:** implemented. Nine tools, no more.
+
+## The tools
+
+`browser_status` · `browser_open` · `browser_navigate` · `browser_pages` ·
+`browser_inspect` · `browser_extract` · `browser_click` · `browser_fill` ·
+`browser_close_page`
+
+Not built: screenshots, scrolling, waiting, select controls, downloads,
+uploads, JavaScript evaluation, credential managers, saved profiles, automatic
+login, CDP attachment, persistent sessions. Each is a separate decision with
+its own failure modes; `browser_evaluate` is the one whose absence matters
+most, since a tool running arbitrary JavaScript would make every other
+boundary here decorative.
+
+## The sequence, and why it cannot be skipped
+
+    UrlPolicy.check → BrowserPolicy.authorize → ToolExecutor → operations.* → audit
+
+Not one line of `browser_tools.py` touches Playwright. Tools decide;
+`jarvis/browser/operations.py` acts. The split is what makes the sequence
+readable in one place — and `operations.navigate` takes a `UrlDecision` and
+refuses one that is not `ALLOWED`, so there is no argument a caller can
+construct without having run the check. Step 4's "nothing navigates yet" guard
+rail is therefore satisfied rather than deleted: `page.goto` appears exactly
+once, behind that refusal.
+
+**The URL is checked before a browser is launched.** `browser_open` gates
+first and only then opens a page, so a request for `file:///etc/passwd` never
+starts a Chromium. Putting resource acquisition ahead of the security decision
+is the wrong order to get used to.
+
+## A bypass found by adversarial tracing, and closed
+
+`operations.navigate` can only check a redirect *after* Playwright has followed
+it — the server decides where a request lands. So a refused redirect on an
+existing page left that page sitting on the forbidden URL. `_origin_of` then
+parsed an origin out of it without re-checking the decision, and since READ is
+permitted by default, **`browser_extract` would have read the cloud metadata
+endpoint.**
+
+`_origin_of` now re-checks the full decision and fails closed, making such a
+page inert to every tool until it is navigated somewhere permitted or closed.
+Pinned by `test_a_page_left_on_a_refused_destination_becomes_inert`, which was
+mutation-checked against the buggy form.
+
+## Confirmation
+
+`browser_click` and `browser_fill` declare `requires_confirmation`. The
+executor obtains approval — fingerprint-bound to the exact element and text —
+*before* the handler runs; the handler then calls the policy with
+`confirmed_by_caller`, which suppresses the question and never the answer.
+DENY still refuses. That is the shape the Obsidian write tools use, and it
+exists because the obvious approach produced two prompts for one action.
+
+An interaction is irreversible, so **no grant makes a click silent** — the
+engine's floor holds even with `browser:*` ALLOW.
+
+## `browser_close_page` and the seeded grant
+
+Closing a page JARVIS opened releases JARVIS's own resource and touches
+nothing of the user's, so it carries a seeded `tool:browser_close_page` grant
+alongside `create_task` and `update_task`. Asking about it would teach the user
+to approve without reading, which is what makes the approvals that matter
+worthless.
+
+There is deliberately no tool that launches, shuts down or restarts the
+browser: a model that could would be able to end somebody else's work, or
+relaunch into a fresh context after being refused on the current one.
+
+## Argument redaction
+
+`browser_fill`'s text is what the user is typing into somebody's website. It
+belongs in the confirmation they read and not in a log that outlives the turn.
+
+`Tool.redact_arguments` is new: declared per tool, applied by the executor at
+both persistence sites (`tool_executions.arguments` and the activity log's
+`detail`). The logging redactor could not help — it matches key *names*, and
+this argument is honestly called `text`.
+
+Deliberately **not** redacted: the confirmation body, because approving "type X
+into the search box" requires seeing X; and the approval fingerprint, which is
+still computed over the real arguments so the binding is unchanged. The audit
+records that a fill happened, into which element, and how many characters.
+
+## Taint
+
+`browser_extract` and `browser_inspect` both return `ToolResult.untrusted`.
+Extract is obvious. Inspect taints because element *names* are page-authored
+text: a button labelled "ignore your previous instructions" is a label, and
+treating the listing as trusted because it is structured would leave the
+obvious hole open.
+
+## Residual gaps
+
+- **`browser_status` composes its own availability sentence** rather than
+  passing `report.reason` through, because that string names the configured
+  executable when one is set. The operator still sees the path through the API.
+- The Step 4 gaps stand unchanged: DNS rebinding is not defeated, and
+  `fnmatch` wildcards cross dots.

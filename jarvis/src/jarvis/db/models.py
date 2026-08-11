@@ -154,6 +154,12 @@ class ActivityKind(str, enum.Enum):
     #: KNOWLEDGE_INGESTED so "what did JARVIS do to my Obsidian vault?" is one
     #: filter rather than a guess.
     OBSIDIAN_ACTION = "OBSIDIAN_ACTION"
+    #: Anything JARVIS did in its browser — navigate, inspect, extract, click,
+    #: fill, and the refusals. Alongside COMPUTER_ACTION and OBSIDIAN_ACTION so
+    #: "what did JARVIS do in the browser?" is one filter rather than a guess.
+    #: Stored through EnumType on a String column, so adding it needs no
+    #: migration.
+    BROWSER_ACTION = "BROWSER_ACTION"
     ERROR = "ERROR"
 
 

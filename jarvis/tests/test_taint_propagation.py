@@ -138,7 +138,13 @@ def test_the_tools_that_return_external_content_declare_it() -> None:
         for tool in build_default_registry().all()
         if "ToolResult.untrusted" in inspect.getsource(tool.handler)
     }
-    assert tainting == {"search_obsidian", "read_obsidian_note", "search_knowledge"}
+    assert tainting == {
+        "search_obsidian", "read_obsidian_note", "search_knowledge",
+        # Phase 4: a web page is the least trusted content JARVIS handles.
+        # ``browser_inspect`` taints too — element *names* are page-authored
+        # text, and a button labelled "ignore your instructions" is a label.
+        "browser_extract", "browser_inspect",
+    }
 
     # read_file taints through the shared computer-tool helper rather than in
     # its own body, so it is asserted separately rather than missed.

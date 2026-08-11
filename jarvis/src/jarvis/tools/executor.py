@@ -109,6 +109,10 @@ class ToolExecutor:
 
         try:
             tool = self.registry.get(call.name)
+            # Before anything else persists them. The row was created above
+            # with the raw arguments because the tool was not yet known; this
+            # is the first moment it is, and nothing has flushed since.
+            record.arguments = tool.for_audit(call.arguments)
             self._validate_arguments(tool, call.arguments)
             decision = await self._authorise(tool, call, ctx, record)
             outcome = await self._invoke(tool, call, ctx, record, decision)
@@ -316,7 +320,10 @@ class ToolExecutor:
             ActivityKind.TOOL_CALL,
             summary=f"{tool.name} → {'error' if result.is_error else 'ok'}",
             actor=f"tool:{tool.name}",
-            detail={"arguments": call.arguments, "data": result.data},
+            detail={
+                "arguments": tool.for_audit(call.arguments),
+                "data": result.data,
+            },
             request_id=ctx.request_id,
             conversation_id=ctx.conversation_id,
             execution_id=record.id,

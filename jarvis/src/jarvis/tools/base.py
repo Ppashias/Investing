@@ -119,6 +119,22 @@ class Tool:
     reversible: bool = True
     enabled: bool = True
 
+    #: Argument names whose values must never be persisted.
+    #:
+    #: The executor writes every call's arguments to ``tool_executions`` and to
+    #: the activity log, which is exactly right for "what did JARVIS try to
+    #: do?" and exactly wrong for the *contents* of a form field. The logging
+    #: redactor cannot help: it matches on key *names*, and ``browser_fill``'s
+    #: argument is honestly called ``text``.
+    #:
+    #: Declared per tool rather than inferred, because only the tool knows
+    #: which of its arguments carry user data as opposed to describing an
+    #: action. The confirmation the user reads is deliberately not redacted —
+    #: approving "type X into the search box" requires seeing X — and the
+    #: approval fingerprint is still computed over the real arguments, so the
+    #: binding is unchanged.
+    redact_arguments: tuple[str, ...] = ()
+
     # ── metadata ─────────────────────────────────────────────────────────────
     version: str = "1"
     #: Grouping for the UI ("system", "tasks", "files", ...).
@@ -154,6 +170,22 @@ class Tool:
             "version": self.version,
         }
 
+    def for_audit(self, arguments: dict[str, Any]) -> dict[str, Any]:
+        """Arguments as they may be written down.
+
+        Returns the same dict when nothing is declared sensitive, so the common
+        case costs nothing and the audit trail is unchanged for every existing
+        tool.
+        """
+        if not self.redact_arguments:
+            return arguments
+        from jarvis.logging import REDACTED
+
+        return {
+            key: (REDACTED if key in self.redact_arguments else value)
+            for key, value in arguments.items()
+        }
+
     def confirmation_text(self, arguments: dict[str, Any]) -> str:
         if self.confirmation_template:
             try:
@@ -187,6 +219,7 @@ def tool(
     reversible: bool = True,
     category: str = "general",
     confirmation_template: str | None = None,
+    redact_arguments: tuple[str, ...] = (),
 ) -> Callable[[ToolHandler], Tool]:
     """Decorator turning an async function into a :class:`Tool`."""
 
@@ -203,6 +236,7 @@ def tool(
             reversible=reversible,
             category=category,
             confirmation_template=confirmation_template,
+            redact_arguments=redact_arguments,
         )
         built.validate_handler()
         return built

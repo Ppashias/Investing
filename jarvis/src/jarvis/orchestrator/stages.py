@@ -144,11 +144,16 @@ class PlanStage(Stage):
     name = "plan"
 
     def __init__(
-        self, router: ModelRouter, registry: ToolRegistry, computer: Any = None
+        self,
+        router: ModelRouter,
+        registry: ToolRegistry,
+        computer: Any = None,
+        browser: Any = None,
     ) -> None:
         self.router = router
         self.registry = registry
         self.computer = computer
+        self.browser = browser
 
     async def run(self, ctx: PipelineContext) -> None:
         available = [
@@ -195,6 +200,9 @@ class PlanStage(Stage):
         ``computer_status`` is never withheld, so "why can't you click?" is
         always answerable.
         """
+        if tool.category == "browser":
+            return self._browser_runnable(tool)
+
         if self.computer is None or tool.category != "computer":
             return True
 
@@ -206,6 +214,27 @@ class PlanStage(Stage):
 
         kind = TOOL_ACTIONS.get(tool.name)
         return kind is None or capabilities.supports(kind)
+
+    def _browser_runnable(self, tool: Tool) -> bool:
+        """Offer browser tools only where a browser could actually run.
+
+        Deliberately does *not* probe: detection starts a driver process and
+        planning happens on every turn. Only the configuration switch is
+        consulted, which is free — a machine with the browser enabled but no
+        Chromium installed still offers the tools and refuses at call time with
+        a reason, which is the honest failure for something that might be
+        installed between one turn and the next.
+
+        ``browser_status`` is never withheld; it is the tool that explains the
+        others' absence.
+        """
+        from jarvis.tools.builtin.browser_tools import TOOL_NEEDS_BROWSER
+
+        if tool.name not in TOOL_NEEDS_BROWSER:
+            return True
+        if self.browser is None:
+            return False
+        return bool(getattr(self.browser.settings, "enabled", True))
 
 
 class ExecuteStage(Stage):
@@ -227,6 +256,7 @@ class ExecuteStage(Stage):
         max_iterations: int = 8,
         embeddings: Any = None,
         computer: Any = None,
+        browser: Any = None,
     ) -> None:
         self.registry = registry
         self._make_executor = executor_factory
@@ -235,6 +265,7 @@ class ExecuteStage(Stage):
         self.max_iterations = max_iterations
         self.embeddings = embeddings
         self.computer = computer
+        self.browser = browser
 
     async def run(self, ctx: PipelineContext) -> None:
         assert ctx.routing is not None
@@ -345,6 +376,7 @@ class ExecuteStage(Stage):
                     "embeddings": self.embeddings,
                     "project_id": ctx.project_id,
                     "computer": self.computer,
+                    "browser": self.browser,
                     # The *same* ActivityService the executor writes its
                     # TOOL_CALL and PERMISSION_DECISION rows through, bound to
                     # this request's session. A tool that keeps its own

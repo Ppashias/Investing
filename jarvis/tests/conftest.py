@@ -239,6 +239,11 @@ async def core(settings: Settings, stub: StubProvider) -> AsyncIterator[JarvisCo
     )
     computer.start()
 
+    # Constructed, never launched. Nothing in the general fixture browses, and
+    # a Chromium process per test would be absurd; the browser tests build
+    # their own service with their own settings.
+    browser = BrowserService(BrowserSettings())
+
     instance = JarvisCore(
         settings=settings,
         database=database,
@@ -251,7 +256,7 @@ async def core(settings: Settings, stub: StubProvider) -> AsyncIterator[JarvisCo
         # Constructed, never launched. Nothing in the general fixture browses,
         # and a Chromium process per test would be absurd; the browser tests
         # build their own service with their own settings.
-        browser=BrowserService(BrowserSettings()),
+        browser=browser,
         orchestrator=Orchestrator(
             registry=tools,
             router=router,
@@ -266,6 +271,7 @@ async def core(settings: Settings, stub: StubProvider) -> AsyncIterator[JarvisCo
             # its own tests that switch it on explicitly.
             memory_capture_mode="off",
             computer=computer,
+            browser=browser,
         ),
     )
     await instance.startup(create_schema=True)

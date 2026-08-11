@@ -96,6 +96,8 @@ class JarvisCore:
                 navigation_timeout_seconds=settings.browser_navigation_timeout_seconds,
                 max_pages=settings.browser_max_pages,
                 storage_dir=settings.browser_storage_dir,
+                allow_localhost=settings.browser_allow_localhost,
+                allow_private_networks=settings.browser_allow_private_networks,
                 launch_args=tuple(settings.browser_launch_args),
             ),
             activity_bus=bus,
@@ -124,6 +126,7 @@ class JarvisCore:
             memory_min_importance=settings.memory_autostore_min_importance,
             memory_duplicate_threshold=settings.memory_duplicate_threshold,
             computer=computer,
+            browser=browser,
         )
 
         return cls(

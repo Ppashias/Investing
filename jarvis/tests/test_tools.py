@@ -43,6 +43,10 @@ def test_default_registry_has_expected_tools() -> None:
         "search_obsidian", "read_obsidian_note", "list_obsidian_notes",
         "obsidian_note_links", "create_obsidian_note", "update_obsidian_note",
         "obsidian_status",
+        # Phase 4
+        "browser_status", "browser_open", "browser_navigate", "browser_pages",
+        "browser_inspect", "browser_extract", "browser_click", "browser_fill",
+        "browser_close_page",
         # Phase 3
         "observe_screen", "list_windows", "click", "scroll", "type_text",
         "press_key", "open_application", "read_file", "write_file",
@@ -51,20 +55,27 @@ def test_default_registry_has_expected_tools() -> None:
 
 
 def test_no_tool_declares_a_sensitive_capability() -> None:
-    """Phase 3 adds EXECUTE tools; SENSITIVE_ACTION remains unreachable.
+    """SENSITIVE_ACTION remains unreachable, and EXTERNAL_ACTION is bounded.
 
     Phase 1-2's invariant was "nothing above WRITE", which computer control
     legitimately breaks — clicking and running commands are EXECUTE by
     definition. What must NOT appear is SENSITIVE_ACTION: financial,
-    communication and system-settings scopes are absent from Phase 3 by
-    design (§43), and a tool declaring that capability would be the first
-    crack in it.
+    communication and system-settings scopes are absent by design (§43), and a
+    tool declaring that capability would be the first crack in it.
+
+    EXTERNAL_ACTION was forbidden outright while the comment beside it read
+    "network actions are Phase 4". Phase 4 arrived, so the guard narrows rather
+    than disappears: the *only* tools that may claim it are the two browser
+    interactions, which are the ones that genuinely reach somebody else's
+    server. Any third tool acquiring it fails here.
     """
+    permitted_external = {"browser_click", "browser_fill"}
     for t in build_default_registry().all():
         assert t.capability is not Capability.SENSITIVE_ACTION, t.name
-        assert t.capability is not Capability.EXTERNAL_ACTION, (
-            f"{t.name} claims EXTERNAL_ACTION; network actions are Phase 4."
-        )
+        if t.capability is Capability.EXTERNAL_ACTION:
+            assert t.name in permitted_external, (
+                f"{t.name} claims EXTERNAL_ACTION; only browser interactions may."
+            )
 
 
 def test_every_computer_tool_routes_through_the_executor() -> None:
