@@ -63,6 +63,13 @@ class PipelineContext:
     completion: CompletionResult | None = None
     usage: Usage = field(default_factory=Usage)
     tool_outcomes: list[Any] = field(default_factory=list)   # ToolOutcome
+    #: Taint acquired from tool *results* during this turn, as opposed to the
+    #: taint :attr:`context_bundle` carries from retrieved memory and knowledge.
+    #: Kept separate so neither can be mistaken for the other, and monotonic:
+    #: once a tool has returned untrusted content, nothing later in the turn
+    #: makes the turn trustworthy again. A clean read after a poisoned one does
+    #: not unread the poisoned one.
+    tool_taint: bool = False
     iterations: int = 0
     pending_confirmation: dict[str, Any] | None = None
     stage_timings: dict[str, float] = field(default_factory=dict)

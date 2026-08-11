@@ -65,18 +65,23 @@ async def _run(
 
     if result.ok:
         payload = dict(result.data)
+        # A file's contents are text JARVIS did not author. Reading one taints
+        # the turn for the same reason reading a note does — the difference
+        # between a note and a file is where it lives, not who wrote it.
+        # Listing a directory is metadata and is left alone.
+        build = ToolResult.untrusted if kind is ActionKind.READ_FILE else ToolResult.ok
         # Verification is reported to the model, not just logged: "the screen
         # did not change" is the signal that stops it building on a click
         # that missed.
         if result.verification.value in {"CONTRADICTED", "INCONCLUSIVE"}:
-            return ToolResult.ok(
+            return build(
                 f"{result.detail}\n\nVerification: {result.verification.value} — "
                 f"{result.verification_detail}",
                 verification=result.verification.value,
                 **payload,
             )
-        return ToolResult.ok(result.detail, verification=result.verification.value,
-                             **payload)
+        return build(result.detail, verification=result.verification.value,
+                     **payload)
 
     return ToolResult.error(
         f"{result.outcome.value}: {result.detail}", outcome=result.outcome.value

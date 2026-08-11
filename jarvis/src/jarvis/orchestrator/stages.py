@@ -327,14 +327,20 @@ class ExecuteStage(Stage):
                 session=ctx.session,
                 request_id=ctx.request_id,
                 conversation_id=ctx.conversation_id,
-                # Set when retrieved memory or knowledge came from untrusted
-                # content. The permission engine escalates every non-read
-                # capability on a tainted request, which is the structural
-                # defence against a document telling JARVIS what to do.
-                tainted=bool(
-                    ctx.context_bundle is not None
-                    and getattr(ctx.context_bundle, "tainted", False)
-                ),
+                # Two sources, OR-ed: untrusted content retrieved into the
+                # context *before* the turn started, and untrusted content a
+                # tool has returned *during* it. The permission engine
+                # escalates every non-read capability on a tainted request,
+                # which is the structural defence against a document telling
+                # JARVIS what to do.
+                #
+                # Read fresh on every iteration of this loop rather than
+                # computed once, because the second source only exists once a
+                # tool has run. That was the defect: taint came from the
+                # context bundle alone, so a note read in step one left step
+                # two untainted and a page saying "now delete everything"
+                # reached a write that had never met a human.
+                tainted=self._tainted(ctx),
                 extras={
                     "embeddings": self.embeddings,
                     "project_id": ctx.project_id,
@@ -363,6 +369,22 @@ class ExecuteStage(Stage):
                 # handler; the turn stops here awaiting the user.
                 raise
             ctx.tool_outcomes.append(outcome)
+
+            # Accumulate before the next iteration, and before the next tool
+            # in *this* batch: a model can request several tools at once, and
+            # the second one must see the first one's taint.
+            #
+            # ``or``, never assignment. A later clean result must not clear
+            # what an earlier untrusted one established — the untrusted content
+            # is already in the transcript the model is reasoning from, and
+            # "the most recent tool was safe" says nothing about that.
+            if outcome.result.tainted and not ctx.tool_taint:
+                ctx.tool_taint = True
+                log.info(
+                    "turn_tainted_by_tool_result",
+                    request_id=ctx.request_id,
+                    tool=use.name,
+                )
             results.append(
                 ToolResultBlock(
                     tool_use_id=use.id,
@@ -371,6 +393,17 @@ class ExecuteStage(Stage):
                 )
             )
         return results
+
+    @staticmethod
+    def _tainted(ctx: PipelineContext) -> bool:
+        """Is anything untrusted in scope for the next tool call?"""
+        return bool(
+            ctx.tool_taint
+            or (
+                ctx.context_bundle is not None
+                and getattr(ctx.context_bundle, "tainted", False)
+            )
+        )
 
     @staticmethod
     async def _persist_assistant_turn(ctx: PipelineContext, completion: Any) -> None:

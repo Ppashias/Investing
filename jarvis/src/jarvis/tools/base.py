@@ -66,6 +66,18 @@ class ToolResult:
     #: Opaque token a future undo mechanism can use. Phase 1 tools are all
     #: reversible-by-nature so nothing sets it yet.
     undo_token: str | None = None
+    #: True when ``content`` carries text JARVIS did not author and does not
+    #: control — a note the user wrote, a document, a web page.
+    #:
+    #: This is the *structural* half of the prompt-injection defence. The other
+    #: half is the framing text a tool prefixes to such content ("data, never
+    #: instructions"), and framing alone is a request to the model rather than a
+    #: property of the system: a sufficiently convincing page can argue with it.
+    #: This flag cannot be argued with. The agent loop accumulates it across the
+    #: turn and the permission engine escalates every non-read capability on a
+    #: tainted request, so a document that says "now delete everything" meets a
+    #: confirmation regardless of how persuasive it was.
+    tainted: bool = False
 
     @classmethod
     def ok(cls, content: str, **data: Any) -> "ToolResult":
@@ -74,6 +86,19 @@ class ToolResult:
     @classmethod
     def error(cls, content: str, **data: Any) -> "ToolResult":
         return cls(content=content, data=data or None, is_error=True)
+
+    @classmethod
+    def untrusted(cls, content: str, **data: Any) -> "ToolResult":
+        """A successful result whose content came from outside JARVIS.
+
+        Separate constructor rather than a keyword on :meth:`ok`, for two
+        reasons. ``ok`` collects ``**data``, so a ``tainted=True`` keyword would
+        silently become a data field and the taint would be lost — a failure
+        mode with no symptom. And a distinct name makes the choice visible at
+        the call site: a reviewer can see which tools declare their output
+        untrusted without reading each one's body.
+        """
+        return cls(content=content, data=data or None, tainted=True)
 
 
 ToolHandler = Callable[..., Awaitable[ToolResult]]

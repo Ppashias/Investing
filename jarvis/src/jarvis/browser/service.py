@@ -99,6 +99,7 @@ from jarvis.browser.capabilities import (
     BrowserUnavailable,
     detect,
 )
+from jarvis.browser.elements import ElementRegistry
 from jarvis.browser.settings import BrowserSettings
 from jarvis.db.base import new_id, utcnow
 from jarvis.logging import get_logger
@@ -112,8 +113,8 @@ class PageHandle:
 
     The id is minted here rather than derived from the URL: a page's URL
     changes under it on every navigation, so anything keyed on the URL would
-    silently start meaning a different page. Element references (a later step)
-    will be scoped to this id for the same reason.
+    silently start meaning a different page. Element references are scoped to
+    this id for the same reason — see :mod:`jarvis.browser.elements`.
     """
 
     page_id: str
@@ -221,6 +222,11 @@ class BrowserService:
         self._browser: Any = None
         self._context: Any = None
         self._pages: dict[str, PageHandle] = {}
+        #: Element references, page-scoped and generation-stamped. Owned here
+        #: because its lifetime is exactly the browser's: the events that
+        #: invalidate references — page closed, page navigated, browser gone —
+        #: are the events this class already handles.
+        self.elements = ElementRegistry()
         #: Set when the browser process dies underneath us, so ``running``
         #: stops claiming otherwise before anyone tries to use it.
         self._disconnected_reason: str | None = None
@@ -480,6 +486,22 @@ class BrowserService:
 
             handle = PageHandle(page_id=new_id("pg"), page=page)
             self._pages[handle.page_id] = handle
+
+            # Every main-frame navigation invalidates the references issued
+            # against the page it replaced. Subscribed here rather than in a
+            # navigation tool: the page can navigate without JARVIS asking —
+            # a redirect, a meta refresh, a script — and references must go
+            # stale for those too, or the ones that matter most survive.
+            def _navigated(frame: Any, _page_id: str = handle.page_id) -> None:
+                try:
+                    if frame.parent_frame is not None:
+                        return  # a sub-frame; the page itself is unchanged
+                except Exception:  # pragma: no cover - defensive
+                    return
+                self.elements.page_navigated(_page_id)
+
+            page.on("framenavigated", _navigated)
+
             log.info("browser_page_opened", page_id=handle.page_id,
                      pages=self.page_count)
             return handle
@@ -530,6 +552,7 @@ class BrowserService:
             except Exception as exc:  # already gone, or the browser died
                 log.debug("browser_page_close_failed", page_id=page_id,
                           error=str(exc))
+            self.elements.forget_page(page_id)
             log.info("browser_page_closed", page_id=page_id, pages=self.page_count)
             return True
 
@@ -542,6 +565,7 @@ class BrowserService:
         """
         for page_id in [pid for pid, h in self._pages.items() if h.closed]:
             self._pages.pop(page_id, None)
+            self.elements.forget_page(page_id)
             log.debug("browser_page_reaped", page_id=page_id)
 
     def _invalidate_if_browser_died(self) -> None:
@@ -567,6 +591,7 @@ class BrowserService:
                 reason=self._disconnected_reason or "the browser process ended",
             )
             self._pages.clear()
+        self.elements.clear()
         self._context = None
 
     # ── shutdown ─────────────────────────────────────────────────────────────
@@ -613,6 +638,11 @@ class BrowserService:
                 log.debug("browser_page_close_failed", page_id=page_id,
                           error=str(exc))
         self._pages.clear()
+        # References are meaningless without the pages they point into, and
+        # they hold locators that hold those pages. Cleared here so shutdown
+        # releases them rather than leaving the registry as the one thing
+        # keeping a dead browser's objects reachable.
+        self.elements.clear()
 
         # Innermost first: a context outliving its browser is not a thing
         # Playwright allows, but a browser outliving the process is. The

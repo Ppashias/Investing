@@ -540,9 +540,16 @@ async def test_agent_loop_denied_write_is_reported_not_performed(
 async def test_a_note_still_cannot_authorise_a_write(core, vault: Path) -> None:
     """Taint escalation, re-proven at the tool layer after the audit change.
 
-    A turn that has read untrusted content is tainted, and the engine forces
-    every non-read capability to ASK — even with a grant that would otherwise
-    allow it outright.
+    Given a tainted turn, the engine forces every non-read capability to ASK —
+    even with a grant that would otherwise allow it outright. That is what this
+    checks, and the flag is set by hand because the engine is the subject.
+
+    It deliberately does *not* prove that reading a note taints the turn. When
+    this was written it could not have: taint came from the context bundle
+    alone and a tool result contributed nothing, so the sentence "a turn that
+    has read a note is tainted" was an assumption rather than a fact about the
+    system. Phase 4 Step 4A closed that gap; ``tests/test_taint_propagation.py``
+    proves the propagation end to end without setting anything by hand.
     """
     from jarvis.db.models import Capability, PermissionGrant
 

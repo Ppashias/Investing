@@ -147,7 +147,10 @@ async def search_obsidian(
         + (f"\n{hit.excerpt}" if hit.excerpt else "")
         for hit in hits
     ]
-    return ToolResult.ok(
+    # ``untrusted``: the excerpts are the user's own prose, and the _TRUST
+    # framing above is a request to the model. The flag is the part that does
+    # not depend on the model agreeing.
+    return ToolResult.untrusted(
         _TRUST + "\n\n".join(lines),
         count=len(hits),
         results=[{"path": h.item.id, "title": h.item.title,
@@ -188,7 +191,7 @@ async def read_obsidian_note(*, ctx: ToolContext, path: str) -> ToolResult:
 
     await service.audit("read", status="OK", target=path, actor="agent",
                         summary=f"Read Obsidian note {path}")
-    return ToolResult.ok(
+    return ToolResult.untrusted(
         f"{_TRUST}[Obsidian → {item.id}]\n{item.content}",
         path=item.id,
         title=item.title,
