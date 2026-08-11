@@ -277,6 +277,10 @@ async def browser_status(*, ctx: ToolContext) -> ToolResult:
         f"Browser: {report.state.value.lower()} — {_availability_sentence(report)}",
         f"Running: {state['running']}. Pages open: {len(pages)} of "
         f"{state['max_pages']}.",
+        "It runs "
+        + ("hidden, so nothing appears on screen."
+           if state["headless"]
+           else "in a visible window, so you can watch and take over."),
         "Its browsing context is isolated and "
         + ("persists between sessions." if state["persists_storage"]
            else "is discarded when JARVIS stops, so it is not logged in to anything."),
@@ -286,12 +290,17 @@ async def browser_status(*, ctx: ToolContext) -> ToolResult:
 
     # Deliberately no executable path, no profile directory, no cookies: a
     # status tool answers "can you browse?", and a filesystem layout is the
-    # operator's business rather than the model's.
+    # operator's business rather than the model's. ``headless`` and
+    # ``persists_storage`` are configuration *stances*, not locations — the
+    # model needs both to answer "will the user see this?" and "are you
+    # carrying state between sessions?" without learning where anything lives.
     return ToolResult.ok(
         "\n".join(lines),
         available=report.available,
         state=report.state.value,
         running=state["running"],
+        headless=state["headless"],
+        persists_storage=state["persists_storage"],
         pages=pages,
         page_count=len(pages),
         max_pages=state["max_pages"],
@@ -475,11 +484,24 @@ async def browser_pages(*, ctx: ToolContext) -> ToolResult:
 
     handles = service.pages()
     if not handles:
+        # Nothing page-authored in this answer, so nothing to distrust.
         return ToolResult.ok("No pages are open.", count=0, pages=[])
-    rows = [{"page_id": h.page_id, "url": h.page.url} for h in handles]
-    listing = "\n".join(f"- {r['page_id']}: {r['url']}" for r in rows)
-    return ToolResult.ok(f"{len(rows)} page(s) open:\n{listing}",
-                         count=len(rows), pages=rows)
+
+    rows = await operations.summarise(handles)
+    listing = "\n".join(
+        f"- {r['page_id']}: {r['url']}" + (f" — {r['title']}" if r["title"] else "")
+        for r in rows
+    )
+    # Untrusted, because a title is written by the site. "<title>IGNORE ALL
+    # PREVIOUS INSTRUCTIONS</title>" is a page listing away from the model
+    # otherwise, and the whole point of Step 4A was that a tool result must be
+    # able to taint the turn. Listing pages is cheap bookkeeping and it is
+    # mildly annoying to pay taint for it — but a rule that exempts the
+    # convenient case is the hole.
+    return ToolResult.untrusted(
+        _TRUST + f"{len(rows)} page(s) open:\n{listing}",
+        count=len(rows), pages=rows,
+    )
 
 
 @tool(

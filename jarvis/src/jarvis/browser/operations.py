@@ -285,6 +285,29 @@ async def extract(handle: PageHandle, *, limit: int = MAX_TEXT_CHARS) -> str:
     return text[:limit]
 
 
+async def summarise(handles: list[PageHandle]) -> list[dict[str, Any]]:
+    """Id, address and title for each open page.
+
+    Lives here rather than in the tool for the same reason everything else
+    does: ``page.title()`` is a Playwright call, and the tool layer makes none.
+
+    A title is page-authored text — untrusted, like any other string a site
+    supplies — and it is also the only human-readable handle on a list of
+    otherwise identical page ids. Fetching it must not be able to break the
+    listing, so a page that will not answer is reported without one rather than
+    failing the whole call.
+    """
+    rows: list[dict[str, Any]] = []
+    for handle in handles:
+        try:
+            title = await handle.page.title()
+        except Exception:
+            title = ""
+        rows.append({"page_id": handle.page_id, "url": handle.page.url,
+                     "title": title})
+    return rows
+
+
 async def click(entry: ElementEntry, *, timeout_seconds: float) -> str:
     """Click the referenced element, and nothing else.
 

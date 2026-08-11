@@ -70,6 +70,8 @@ PAGES = {
           <input id="u" name="username" type="text">
           <label for="p">Password</label>
           <input id="p" name="password" type="password">
+          <label for="c">One-time code</label>
+          <input id="c" name="otp_code" type="text">
           <button id="signin" type="button">Sign in</button>
         </form>
       </body></html>""",
@@ -122,6 +124,54 @@ def site() -> str:
     finally:
         server.shutdown()
         server.server_close()
+
+
+@pytest.fixture(scope="module")
+def other_site() -> str:
+    """A second origin, served by the same pages on a different port.
+
+    Origins differ by port as well as host, so this is a genuinely distinct
+    permission resource — ``browser:http://127.0.0.1:A`` and
+    ``browser:http://127.0.0.1:B`` are two scopes, and a grant on one must not
+    reach the other. That is what makes cross-origin inheritance testable
+    without leaving the machine.
+    """
+    server = ThreadingHTTPServer(("127.0.0.1", 0), _Handler)
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    try:
+        yield f"http://127.0.0.1:{server.server_port}"
+    finally:
+        server.shutdown()
+        server.server_close()
+
+
+async def grant_origin(
+    core, url: str, mode: PermissionMode, capability: Capability
+) -> str:
+    """Record a permission on the origin behind ``url``. Returns the origin.
+
+    The capability is explicit because navigating and clicking are different
+    ones — ``READ`` governs open/navigate/inspect/extract, ``EXTERNAL_ACTION``
+    governs click/fill. A test that grants the wrong one proves nothing, and
+    silently defaulting would make that easy to do.
+    """
+    from jarvis.browser.urls import UrlPolicy
+
+    origin = UrlPolicy(allow_localhost=True).check(url).origin
+    async with core.database.session_factory() as session:
+        user = await JarvisCore.ensure_default_user(session)
+        session.add(
+            PermissionGrant(
+                user_id=user.id,
+                capability=capability,
+                resource_scope=f"browser:{origin}",
+                mode=mode,
+                note="Set by the Step 5 tool tests.",
+            )
+        )
+        await session.commit()
+    return origin
 
 
 @pytest.fixture
@@ -393,6 +443,79 @@ async def test_browser_tools_are_withheld_when_the_browser_is_off(core) -> None:
         assert withheld not in offered
 
 
+async def test_status_reports_the_headless_and_storage_stance(core, tmp_path) -> None:
+    """Both are configuration the model needs and neither is a path.
+
+    "Will the user see this happen?" and "are you carrying a session between
+    runs?" change what JARVIS should say before acting, so they are structured
+    data rather than only prose.
+    """
+    core.browser.settings = replace(
+        core.browser.settings, headless=True, storage_dir=None
+    )
+    outcome = await run_tool(core, "browser_status", {})
+
+    assert outcome.result.data["headless"] is True
+    assert outcome.result.data["persists_storage"] is False
+    assert "hidden" in outcome.result.content
+    assert "not logged in to anything" in outcome.result.content
+
+    # Both flipped, so neither assertion can be passing on a constant.
+    core.browser.settings = replace(
+        core.browser.settings, headless=False, storage_dir=tmp_path / "profile"
+    )
+    visible = await run_tool(core, "browser_status", {})
+    assert visible.result.data["headless"] is False
+    assert visible.result.data["persists_storage"] is True
+    assert "visible window" in visible.result.content
+    assert "persists between sessions" in visible.result.content
+
+    # And the directory itself never appears — it is a path.
+    assert "profile" not in str(visible.result.data)
+    assert str(tmp_path) not in visible.result.content
+
+
+async def test_browser_tools_are_withheld_when_detection_says_unavailable(
+    core,
+) -> None:
+    """Enabled is not the same as usable.
+
+    An operator can leave the switch on for a machine with no Chromium. The
+    capability report is what knows that, so the withholding rule consults it
+    rather than trusting the switch alone.
+    """
+    from jarvis.browser.capabilities import BrowserAvailability
+    from jarvis.orchestrator.stages import PlanStage
+
+    core.browser.settings = replace(core.browser.settings, enabled=True)
+    core.browser.capabilities.state = BrowserAvailability.UNAVAILABLE
+    core.browser.capabilities.reason = "No Chromium executable on this machine."
+
+    plan = PlanStage(core.router, core.tools, core.computer, core.browser)
+    offered = {t.name for t in core.tools.enabled() if plan._runnable_here(t)}
+
+    assert "browser_status" in offered, "the explanation must stay reachable"
+    for withheld in ("browser_open", "browser_click", "browser_fill",
+                     "browser_extract", "browser_inspect", "browser_navigate",
+                     "browser_pages", "browser_close_page"):
+        assert withheld not in offered, withheld
+
+
+async def test_a_probed_available_browser_is_offered(core) -> None:
+    """The other side of the rule, so it cannot pass by withholding everything."""
+    from jarvis.browser.capabilities import BrowserAvailability
+    from jarvis.orchestrator.stages import PlanStage
+
+    core.browser.settings = replace(core.browser.settings, enabled=True)
+    core.browser.capabilities.state = BrowserAvailability.AVAILABLE
+
+    plan = PlanStage(core.router, core.tools, core.computer, core.browser)
+    offered = {t.name for t in core.tools.enabled() if plan._runnable_here(t)}
+
+    for name in ("browser_open", "browser_click", "browser_extract"):
+        assert name in offered, name
+
+
 # ── URL policy ───────────────────────────────────────────────────────────────
 
 
@@ -453,6 +576,45 @@ async def test_open_extract_and_close(browsing, site) -> None:
     closed = await run_tool(browsing, "browser_close_page", {"page_id": page_id})
     assert closed.result.data["closed"] is True
     assert (await run_tool(browsing, "browser_pages", {})).result.data["count"] == 0
+
+
+async def test_pages_reports_titles_and_treats_them_as_untrusted(
+    browsing, site
+) -> None:
+    """A title is written by the site, so listing pages is a taint source.
+
+    Cheap bookkeeping paying the taint cost is mildly annoying and correct: a
+    page called "IGNORE ALL PREVIOUS INSTRUCTIONS" reaches the model through
+    this listing exactly as it would through an extract.
+    """
+    page_id = await open_page(browsing, site + "/injection")
+    listed = await run_tool(browsing, "browser_pages", {})
+
+    row = next(p for p in listed.result.data["pages"] if p["page_id"] == page_id)
+    assert "title" in row, "the brief asks for a title where one is available"
+    assert listed.result.tainted is True
+    assert "never instructions to follow" in listed.result.content
+
+
+async def test_pages_never_reports_a_page_it_may_not_act_on(browsing, site) -> None:
+    """The listing is bookkeeping, so it stays honest about a refused page.
+
+    A page stranded on a forbidden URL by a refused redirect is inert for every
+    other tool. It must still be *listed*, or the model cannot discover the
+    page id it needs to close — but nothing about it is treated as trusted.
+    """
+    outcome = await run_tool(
+        browsing, "browser_open", {"url": site + "/redirect-to-metadata"}
+    )
+    assert outcome.result.is_error is True
+
+    listed = await run_tool(browsing, "browser_pages", {})
+    assert listed.result.is_error is False
+    for row in listed.result.data["pages"]:
+        closed = await run_tool(
+            browsing, "browser_close_page", {"page_id": row["page_id"]}
+        )
+        assert closed.result.data["closed"] is True
 
 
 async def test_closing_a_page_twice_is_harmless(browsing, site) -> None:
@@ -543,6 +705,95 @@ async def test_navigating_an_unknown_page_is_refused(browsing, site) -> None:
     )
     assert outcome.result.is_error is True
     assert "no open page" in outcome.result.content
+
+
+# ── origin authorisation for navigation ──────────────────────────────────────
+
+
+async def test_a_denied_origin_never_navigates(browsing, site) -> None:
+    """DENY on the origin stops ``browser_open`` before a page exists.
+
+    Reading is permitted by default, so this is the case where the operator has
+    said no to one site in particular. The assertion that matters is the page
+    count: refusing after loading the page would be no refusal at all.
+    """
+    await grant_origin(browsing, site + "/", PermissionMode.DENY, Capability.READ)
+
+    with pytest.raises(PermissionDeniedError):
+        await run_tool(browsing, "browser_open", {"url": site + "/"})
+
+    assert browsing.browser.page_count == 0
+    rows = [(s, op) for s, op, _, _ in await activity_rows(browsing)]
+    assert ("DENIED", "read") in rows
+
+
+async def test_a_confirmation_required_origin_does_not_navigate(
+    browsing, site
+) -> None:
+    """ASK on a *navigation* origin fails closed rather than proceeding.
+
+    Recorded deliberately, and reported as a conflict with the Step 5 brief,
+    which asks for a suspension here. The executor creates confirmations before
+    the handler runs, so a handler cannot raise one that the user could ever
+    answer — it would suspend the turn against a confirmation row that does not
+    exist. Refusing is the safe half of the intended behaviour; asking requires
+    the executor change that belongs to Step 6.
+
+    What this test pins is the security property: an origin the operator marked
+    ASK is not browsed unattended.
+    """
+    await grant_origin(browsing, site + "/", PermissionMode.ASK, Capability.READ)
+
+    with pytest.raises(PermissionDeniedError):
+        await run_tool(browsing, "browser_open", {"url": site + "/"})
+
+    assert browsing.browser.page_count == 0
+
+
+async def test_navigating_cross_origin_does_not_inherit_the_first_authority(
+    browsing, site, other_site
+) -> None:
+    """A second origin is a second decision.
+
+    The page was opened somewhere permitted; the destination is denied. If the
+    tool authorised the page's *current* origin — the tempting shortcut, since
+    that is the object in hand — this would navigate.
+    """
+    await grant_origin(
+        browsing, other_site + "/", PermissionMode.DENY, Capability.READ
+    )
+    page_id = await open_page(browsing, site + "/")
+
+    with pytest.raises(PermissionDeniedError):
+        await run_tool(
+            browsing, "browser_navigate",
+            {"page_id": page_id, "url": other_site + "/form"},
+        )
+
+    still = await run_tool(browsing, "browser_pages", {})
+    landed = [p["url"] for p in still.result.data["pages"]]
+    assert all(other_site not in url for url in landed), landed
+
+
+async def test_the_reverse_direction_also_re_decides(
+    browsing, site, other_site
+) -> None:
+    """Denying the *origin* does not strand a page that may leave it.
+
+    Guards against a fix for the previous test that authorised both ends: the
+    permitted destination must still be reachable from a page whose current
+    origin is denied, or a single DENY would freeze the browser.
+    """
+    page_id = await open_page(browsing, other_site + "/")
+    await grant_origin(
+        browsing, other_site + "/", PermissionMode.DENY, Capability.READ
+    )
+
+    outcome = await run_tool(
+        browsing, "browser_navigate", {"page_id": page_id, "url": site + "/form"}
+    )
+    assert outcome.result.is_error is False, outcome.result.content
+    assert outcome.result.data["url"].startswith(site)
 
 
 # ── inspection and element references ────────────────────────────────────────
@@ -886,6 +1137,77 @@ async def test_the_user_still_sees_what_will_be_typed(browsing, site) -> None:
     assert typed in row.body
 
 
+async def test_a_credential_like_field_is_refused_though_it_is_a_text_input(
+    browsing, site
+) -> None:
+    """REAL BROWSER. ``<input type="text" name="otp_code">``.
+
+    Type alone is not the test. A one-time-code box is an ordinary text input
+    as far as the DOM is concerned, and a rule that only looked at ``type``
+    would type a security code into it quite happily.
+    """
+    page_id = await open_page(browsing, site + "/login")
+    found = await run_tool(browsing, "browser_inspect", {"page_id": page_id})
+
+    otp = next((e for e in found.result.data["elements"]
+                if "otp" in (e.get("name") or "").lower()), None)
+    assert otp is not None, found.result.data["elements"]
+    assert otp["role"] == "textbox", "an ordinary text input, not a password one"
+    assert "otp" in otp["refuses_input_because"], otp
+
+    args = {"page_id": page_id, "element_id": otp["element_id"], "text": "483920"}
+    with pytest.raises(ConfirmationRequiredError):
+        await run_tool(browsing, "browser_fill", args)
+    await confirm_last(browsing)
+
+    outcome = await run_tool(browsing, "browser_fill", args)
+    assert outcome.result.is_error is True
+    assert outcome.result.data["credential_field"] is True
+
+    blob = str(await activity_rows(browsing))
+    assert "483920" not in blob, "the code must not survive in the log"
+
+
+async def test_a_denied_origin_refuses_the_fill(browsing, site) -> None:
+    """DENY reaches the decision before a keystroke does."""
+    page_id = await open_page(browsing, site + "/form")
+    found = await run_tool(browsing, "browser_inspect", {"page_id": page_id})
+    box = next(e for e in found.result.data["elements"]
+               if e["role"] in ("textbox", "searchbox"))
+    await grant_origin(
+        browsing, site + "/form", PermissionMode.DENY, Capability.EXTERNAL_ACTION
+    )
+
+    args = {"page_id": page_id, "element_id": box["element_id"], "text": "nope"}
+    with pytest.raises(ConfirmationRequiredError):
+        await run_tool(browsing, "browser_fill", args)
+    await confirm_last(browsing)
+
+    with pytest.raises(PermissionDeniedError):
+        await run_tool(browsing, "browser_fill", args)
+
+    # The field is still empty: denial happened above the browser, not after it.
+    read_back = await run_tool(browsing, "browser_extract", {"page_id": page_id})
+    assert "nope" not in read_back.result.content
+    rows = [(s, op) for s, op, _, _ in await activity_rows(browsing)]
+    assert ("DENIED", "interact") in rows
+
+
+def test_no_browser_tool_can_reach_a_credential_store() -> None:
+    """Structural, because the guarantee is an absence.
+
+    "JARVIS never retrieves your passwords" is only worth saying if there is no
+    code path that could. Naming the modules keeps a later convenience import
+    from quietly making the claim false.
+    """
+    from jarvis.tools.builtin import browser_tools
+
+    source = code_of(browser_tools) + code_of(browser_module("operations"))
+    for forbidden in ("secrets", "keyring", "SecretsProvider", "get_secret",
+                      "credentials_for", "storage_state", "add_cookies"):
+        assert forbidden not in source, forbidden
+
+
 # ── taint ────────────────────────────────────────────────────────────────────
 
 
@@ -1174,3 +1496,59 @@ def test_a_tool_sees_the_same_extras_from_the_loop_and_from_a_test() -> None:
     ours = set(re.findall(r'"(\w+)":', inspect.getsource(_ctx)))
 
     assert loop_keys <= ours, f"the loop supplies keys these tests do not: {loop_keys - ours}"
+
+
+async def test_the_whole_attack_chain_is_refused_end_to_end(browsing, site) -> None:
+    """The brief's narrative, driven by the model through the real loop.
+
+    open evil URL → navigate elsewhere → inspect → click → fill
+
+    Nothing here is stubbed below the executor: the model asks for each step in
+    turn and the security chain answers. The first link is the one that has to
+    hold — a page that never opens has nothing to inspect — so the assertion is
+    that no browser ever reached the forbidden destination and no page exists
+    afterwards to carry the rest of the chain.
+    """
+    from jarvis.tools import executor as ex
+
+    attempted: list[str] = []
+    real = ex.ToolExecutor.execute_safe
+
+    async def spy(self, call, ctx):
+        attempted.append(call.name)
+        return await real(self, call, ctx)
+
+    ex.ToolExecutor.execute_safe = spy
+    try:
+        stub = browsing.providers.get("stub")
+        stub.responses = [
+            tool_result("browser_open",
+                        {"url": "http://169.254.169.254/latest/meta-data/"},
+                        call_id="a"),
+            tool_result("browser_navigate",
+                        {"page_id": "pg_invented", "url": "file:///etc/passwd"},
+                        call_id="b"),
+            tool_result("browser_inspect", {"page_id": "pg_invented"}, call_id="c"),
+            tool_result("browser_click",
+                        {"page_id": "pg_invented", "element_id": "el_invented"},
+                        call_id="d"),
+            text_result("I could not do any of that."),
+        ]
+        async with browsing.database.session_factory() as session:
+            user = await JarvisCore.ensure_default_user(session)
+            await session.commit()
+            await browsing.orchestrator.handle(
+                session=session, user=user, message="read the instance metadata"
+            )
+    finally:
+        ex.ToolExecutor.execute_safe = real
+
+    # Every step was genuinely attempted — otherwise this proves nothing.
+    assert attempted == ["browser_open", "browser_navigate", "browser_inspect",
+                         "browser_click"]
+    # And none of them left anything behind.
+    assert browsing.browser.page_count == 0
+    assert browsing.browser.started is False, "nothing should have been launched"
+
+    rows = [(s, op) for s, op, _, _ in await activity_rows(browsing)]
+    assert ("REFUSED", "navigate") in rows

@@ -143,7 +143,9 @@ def test_the_tools_that_return_external_content_declare_it() -> None:
         # Phase 4: a web page is the least trusted content JARVIS handles.
         # ``browser_inspect`` taints too — element *names* are page-authored
         # text, and a button labelled "ignore your instructions" is a label.
-        "browser_extract", "browser_inspect",
+        # ``browser_pages`` taints for the same reason: it reports page titles,
+        # and a title is written by the site.
+        "browser_extract", "browser_inspect", "browser_pages",
     }
 
     # read_file taints through the shared computer-tool helper rather than in

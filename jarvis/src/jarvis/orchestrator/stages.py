@@ -218,23 +218,38 @@ class PlanStage(Stage):
     def _browser_runnable(self, tool: Tool) -> bool:
         """Offer browser tools only where a browser could actually run.
 
-        Deliberately does *not* probe: detection starts a driver process and
-        planning happens on every turn. Only the configuration switch is
-        consulted, which is free — a machine with the browser enabled but no
-        Chromium installed still offers the tools and refuses at call time with
-        a reason, which is the honest failure for something that might be
-        installed between one turn and the next.
+        Two questions, both answered without I/O. The configuration switch,
+        which is free to read; and the *cached* capability report, which is
+        whatever the last probe concluded. Consulting the cache rather than
+        probing is the point: ``detect()`` starts a driver process, planning
+        happens on every turn, and a status tool that costs a process launch
+        per turn would be switched off.
+
+        UNPROBED therefore offers the tools. That is deliberate rather than
+        lax — nobody has established the browser is unusable, and the call
+        itself probes and refuses with a reason. The alternative, withholding
+        until something has probed, hides the tools on a healthy machine until
+        an unrelated call happens to warm the cache.
 
         ``browser_status`` is never withheld; it is the tool that explains the
         others' absence.
         """
+        from jarvis.browser.capabilities import BrowserAvailability
         from jarvis.tools.builtin.browser_tools import TOOL_NEEDS_BROWSER
 
         if tool.name not in TOOL_NEEDS_BROWSER:
             return True
         if self.browser is None:
             return False
-        return bool(getattr(self.browser.settings, "enabled", True))
+        if not getattr(self.browser.settings, "enabled", True):
+            return False
+
+        report = getattr(self.browser, "capabilities", None)
+        state = getattr(report, "state", None)
+        return state not in (
+            BrowserAvailability.UNAVAILABLE,
+            BrowserAvailability.DISABLED,
+        )
 
 
 class ExecuteStage(Stage):
