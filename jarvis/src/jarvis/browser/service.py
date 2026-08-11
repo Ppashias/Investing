@@ -42,6 +42,41 @@ Nothing launches at import, at construction, or during
 handful of subprocesses; a user who never asks JARVIS to browse should never
 pay for one. :meth:`launch` is called on first use and is idempotent.
 
+## Ownership, and the single lock that follows from it
+
+::
+
+    BrowserService
+      └── Playwright runtime      (started by launch, stopped by shutdown)
+          └── Browser             (one process, JARVIS's own)
+              └── BrowserContext  (one, isolated)
+                  └── Pages       (up to ``max_pages``)
+
+Every resource is created by the service and destroyed by it. Nothing is
+adopted from outside, so there is no case where teardown has to decide whether
+something is JARVIS's to close.
+
+The hierarchy is why there is **one** lock rather than one per level. Every
+state change reads a level and writes the one below it — launch reads "is there
+a browser?" and writes a context; page creation reads the page count and writes
+a page — and every one of those reads and writes is separated by an ``await``.
+A lock per resource would leave the gaps between levels unguarded, which is
+exactly where the interesting failures live: a page created into a context a
+concurrent shutdown had already closed, or a cap checked before any concurrent
+caller had registered anything. That last one was real, and measured — a limit
+of two admitted five before the lock covered page creation.
+
+## What death means
+
+When the browser process ends, everything under it ends with it. The service
+does not pretend otherwise and does not put it back: pages are dropped rather
+than reopened, the context is discarded rather than reused, and a caller that
+wants a page afterwards asks for one and gets a page in a new clean context. A
+silent replacement would hand back something that looks like the old page and
+is not — no history, no state, no cookies, and no indication anything changed.
+The lost cookies are the point rather than a side effect: recovery must not
+quietly restore an authentication the user never granted twice.
+
 ## Platform
 
 Everything here is Playwright's async API and :mod:`asyncio`. There is no
@@ -129,6 +164,37 @@ class LaunchOutcome:
             raise BrowserUnavailable(self.reason or "The browser is unavailable.")
 
 
+@dataclass(slots=True)
+class ShutdownReport:
+    """What happened on the way out.
+
+    Shutdown never raises — :meth:`JarvisCore.shutdown` must be able to finish
+    — but "never raises" and "nothing went wrong" are different claims, and
+    collapsing them is how a teardown failure becomes invisible. Each failed
+    step is recorded here and logged; a caller that cares can look, and the
+    one that cannot act on it is not forced to.
+    """
+
+    #: ``{"context": "...", "browser": "...", "playwright": "..."}`` for the
+    #: steps that failed. Empty when everything closed cleanly.
+    failures: dict[str, str] = field(default_factory=dict)
+    #: Steps abandoned because they exceeded ``shutdown_timeout_seconds``.
+    timed_out: list[str] = field(default_factory=list)
+    pages_closed: int = 0
+
+    @property
+    def clean(self) -> bool:
+        return not self.failures and not self.timed_out
+
+    def describe(self) -> dict[str, Any]:
+        return {
+            "clean": self.clean,
+            "pages_closed": self.pages_closed,
+            "failures": dict(self.failures),
+            "timed_out": list(self.timed_out),
+        }
+
+
 class BrowserService:
     """Owns the Playwright runtime. One per JARVIS process."""
 
@@ -158,9 +224,22 @@ class BrowserService:
         #: Set when the browser process dies underneath us, so ``running``
         #: stops claiming otherwise before anyone tries to use it.
         self._disconnected_reason: str | None = None
-        #: Serialises launch and shutdown. Two concurrent first-uses would
-        #: otherwise race to create two browsers and leak one.
+        #: The one lock, held for every operation that reads-then-changes
+        #: lifecycle state: launching, opening a page, closing a page, tearing
+        #: down.
+        #:
+        #: One lock rather than one per resource, because the races worth
+        #: preventing all cross resource boundaries. Page creation reads
+        #: ``page_count``, awaits, and then writes it — with a separate page
+        #: lock, a shutdown could still land in that await and hand the caller
+        #: a page belonging to a context that no longer exists. Serialising a
+        #: local browser's lifecycle costs nothing at five pages.
+        #:
+        #: Every method that takes it calls only ``_locked`` helpers, never
+        #: another public method: :class:`asyncio.Lock` is not reentrant, so
+        #: ``new_page`` calling ``launch`` would deadlock.
         self._lock = asyncio.Lock()
+        self._last_shutdown: ShutdownReport | None = None
 
     # ── state ────────────────────────────────────────────────────────────────
 
@@ -190,7 +269,14 @@ class BrowserService:
         return len(self._pages)
 
     def describe(self) -> dict[str, Any]:
-        """A synchronous snapshot. Never launches anything."""
+        """A synchronous snapshot. Never launches anything.
+
+        Invalidates first, so a dead browser is not described as holding open
+        pages. Safe to mutate state without the lock because nothing between
+        here and the return awaits: on a single-threaded event loop this runs
+        to completion before any locked coroutine can resume.
+        """
+        self._invalidate_if_browser_died()
         return {
             "enabled": self.settings.enabled,
             "started": self.started,
@@ -235,42 +321,55 @@ class BrowserService:
         still has to work on.
         """
         async with self._lock:
-            if self.running:
-                return LaunchOutcome(ok=True, report=self.capabilities)
+            return await self._launch_locked()
 
-            if self.started and not self.running:
-                # Crashed since last time. Tear the corpse down before
-                # replacing it, or the old Playwright object leaks.
-                log.warning(
-                    "browser_relaunch_after_disconnect",
-                    reason=self._disconnected_reason,
-                )
-                await self._teardown()
+    async def _launch_locked(self) -> LaunchOutcome:
+        """The launch decision. Assumes the lock is held.
 
-            report = await self.detect()
-            if not report.available:
-                return LaunchOutcome(ok=False, report=report, reason=report.reason)
-
-            try:
-                await self._start_locked(report)
-            except Exception as exc:
-                # Partial state is the dangerous outcome — a Playwright driver
-                # with no browser, or a browser with no context. Unwind whatever
-                # did come up so the next attempt starts from nothing.
-                await self._teardown()
-                reason = f"The browser failed to start: {exc}"
-                self.capabilities.verified = False
-                log.warning("browser_launch_failed", error=str(exc))
-                return LaunchOutcome(ok=False, report=self.capabilities, reason=reason)
-
-            self.capabilities.verified = True
-            log.info(
-                "browser_launched",
-                headless=self.settings.headless,
-                persists_storage=self.settings.persists_storage,
-                executable_source=report.executable_source,
-            )
+        Separate from :meth:`launch` so :meth:`new_page` can launch and open a
+        page as one atomic operation. Without that, the page cap was a
+        check-then-act across an ``await`` and concurrent callers sailed past
+        it — five simultaneous requests against a limit of two produced five
+        real pages.
+        """
+        if self.running:
             return LaunchOutcome(ok=True, report=self.capabilities)
+
+        if self.started and not self.running:
+            # Crashed since last time. Tear the corpse down before replacing
+            # it, or the old Playwright object leaks.
+            log.warning(
+                "browser_relaunch_after_disconnect",
+                reason=self._disconnected_reason,
+            )
+            await self._teardown()
+
+        report = await self.detect()
+        if not report.available:
+            return LaunchOutcome(ok=False, report=report, reason=report.reason)
+
+        try:
+            await self._start_locked(report)
+        except Exception as exc:
+            # Partial state is the dangerous outcome — a Playwright driver
+            # with no browser, or a browser with no context. A context that
+            # fails to create is the likeliest case and the one that would
+            # otherwise strand a live Chromium with nothing referencing it.
+            # Unwind whatever did come up so the next attempt starts clean.
+            await self._teardown()
+            reason = f"The browser failed to start: {exc}"
+            self.capabilities.verified = False
+            log.warning("browser_launch_failed", error=str(exc))
+            return LaunchOutcome(ok=False, report=self.capabilities, reason=reason)
+
+        self.capabilities.verified = True
+        log.info(
+            "browser_launched",
+            headless=self.settings.headless,
+            persists_storage=self.settings.persists_storage,
+            executable_source=report.executable_source,
+        )
+        return LaunchOutcome(ok=True, report=self.capabilities)
 
     async def _start_locked(self, report: BrowserCapabilityReport) -> None:
         """The launch itself. Called with the lock held."""
@@ -313,7 +412,13 @@ class BrowserService:
                 self.capabilities.notes.append(note)
             log.info("browser_storage_persistent", directory=str(self.settings.storage_dir))
 
-        self._context = await self._browser.new_context(**context_kwargs)
+        # Bounded, because ``new_context`` takes no timeout of its own and a
+        # hang here would leave a live browser behind an await that never
+        # returns. Part of launching, so it shares the launch budget.
+        self._context = await asyncio.wait_for(
+            self._browser.new_context(**context_kwargs),
+            timeout=self.settings.launch_timeout_seconds,
+        )
         self._context.set_default_navigation_timeout(
             self.settings.navigation_timeout_seconds * 1000
         )
@@ -333,31 +438,69 @@ class BrowserService:
     async def new_page(self) -> PageHandle:
         """Open a page in the isolated context, launching the browser if needed.
 
+        The whole operation — launch if necessary, check the cap, create, and
+        register — happens under one lock. That is not tidiness: the cap is a
+        check-then-act across an ``await``, and without the lock concurrent
+        callers each saw a count taken before any of them had registered
+        anything. A limit of two admitted five.
+
         Raises rather than returning an outcome, because unlike launch there is
         no useful degraded behaviour: a caller asking for a page has already
         decided it needs one.
         """
-        outcome = await self.launch()
-        outcome.require()
+        async with self._lock:
+            outcome = await self._launch_locked()
+            outcome.require()
 
-        self._reap_closed_pages()
-        if self.page_count >= self.settings.max_pages:
-            raise BrowserError(
-                f"The browser already has {self.page_count} pages open and the "
-                f"limit is {self.settings.max_pages}. Close a page first.",
-            )
+            self._reap_closed_pages()
+            if self.page_count >= self.settings.max_pages:
+                raise BrowserError(
+                    f"The browser already has {self.page_count} pages open and "
+                    f"the limit is {self.settings.max_pages}. Close a page "
+                    "first.",
+                )
 
-        page = await self._context.new_page()
-        handle = PageHandle(page_id=new_id("pg"), page=page)
-        self._pages[handle.page_id] = handle
-        log.info("browser_page_opened", page_id=handle.page_id,
-                 pages=self.page_count)
-        return handle
+            try:
+                page = await asyncio.wait_for(
+                    self._context.new_page(),
+                    timeout=self.settings.launch_timeout_seconds,
+                )
+            except Exception as exc:
+                # Nothing is registered on failure, so the cap is not consumed
+                # by a page that does not exist. A page failing to open is not
+                # evidence the browser is dead, so the browser is left alone —
+                # confusing the two would tear down a working browser because
+                # one tab misbehaved.
+                if isinstance(exc, asyncio.TimeoutError):
+                    raise BrowserError(
+                        "The browser did not open a new page within "
+                        f"{self.settings.launch_timeout_seconds:g}s."
+                    ) from exc
+                raise BrowserError(f"The browser could not open a page: {exc}") from exc
+
+            handle = PageHandle(page_id=new_id("pg"), page=page)
+            self._pages[handle.page_id] = handle
+            log.info("browser_page_opened", page_id=handle.page_id,
+                     pages=self.page_count)
+            return handle
 
     def page(self, page_id: str) -> PageHandle:
-        """Look up an open page. Raises if it is unknown or already closed."""
+        """Look up an open page. Raises if it is unknown, closed, or orphaned.
+
+        The three refusals say different things on purpose. "There is no such
+        page" is a caller error; "you closed it" is a caller fact; "the browser
+        died" is neither, and reporting it as a closed page would send someone
+        looking for a bug in their own bookkeeping.
+        """
+        self._invalidate_if_browser_died()
         handle = self._pages.get(page_id)
         if handle is None:
+            if self.started and not self.running:
+                raise BrowserError(
+                    f"Page {page_id!r} is gone: the browser process ended. "
+                    "Launch a new browser and open a new page — the old one "
+                    "cannot be restored."
+                )
             raise BrowserError(f"There is no open page {page_id!r}.")
         if handle.closed:
             self._pages.pop(page_id, None)
@@ -365,20 +508,30 @@ class BrowserService:
         return handle
 
     def pages(self) -> list[PageHandle]:
+        self._invalidate_if_browser_died()
         self._reap_closed_pages()
         return list(self._pages.values())
 
     async def close_page(self, page_id: str) -> bool:
-        """Close one page. Returns False if it was not open."""
-        handle = self._pages.pop(page_id, None)
-        if handle is None:
-            return False
-        try:
-            await handle.page.close()
-        except Exception as exc:  # already gone, or the browser died
-            log.debug("browser_page_close_failed", page_id=page_id, error=str(exc))
-        log.info("browser_page_closed", page_id=page_id, pages=self.page_count)
-        return True
+        """Close one page. Returns False if it was not open.
+
+        Under the lock, so a page cannot be closed halfway through a teardown
+        that is already closing it.
+        """
+        async with self._lock:
+            handle = self._pages.pop(page_id, None)
+            if handle is None:
+                return False
+            try:
+                await asyncio.wait_for(
+                    handle.page.close(),
+                    timeout=self.settings.shutdown_timeout_seconds,
+                )
+            except Exception as exc:  # already gone, or the browser died
+                log.debug("browser_page_close_failed", page_id=page_id,
+                          error=str(exc))
+            log.info("browser_page_closed", page_id=page_id, pages=self.page_count)
+            return True
 
     def _reap_closed_pages(self) -> None:
         """Forget pages the browser closed on its own.
@@ -391,30 +544,80 @@ class BrowserService:
             self._pages.pop(page_id, None)
             log.debug("browser_page_reaped", page_id=page_id)
 
+    def _invalidate_if_browser_died(self) -> None:
+        """Drop every page handle once the browser is gone.
+
+        When the browser process ends, its context and every page inside it go
+        with it — there is nothing left to hold a handle to. Keeping the
+        bookkeeping would let :meth:`describe` report open pages that do not
+        exist, and would let the cap refuse a new page on a browser that has
+        none.
+
+        Deliberately not a resurrection: the pages are dropped, not reopened.
+        A caller that wants a page after a crash asks for one, and gets a page
+        in a new clean context rather than a silent replacement for the one it
+        lost.
+        """
+        if self._browser is None or self.running:
+            return
+        if self._pages:
+            log.warning(
+                "browser_pages_invalidated",
+                pages=len(self._pages),
+                reason=self._disconnected_reason or "the browser process ended",
+            )
+            self._pages.clear()
+        self._context = None
+
     # ── shutdown ─────────────────────────────────────────────────────────────
 
-    async def shutdown(self) -> None:
+    async def shutdown(self) -> ShutdownReport:
         """Close everything, in order, and survive any of it having failed.
 
         Safe to call when nothing started, when only part of it started, and
         repeatedly. Called from :meth:`JarvisCore.shutdown`, which must not
         raise on the way out — a process that cannot exit cleanly leaves the
         browser it owns running, which is precisely the outcome to avoid.
+
+        Returns rather than raises, and returns something rather than nothing:
+        see :class:`ShutdownReport` for why "did not raise" is not the same
+        claim as "closed cleanly".
         """
         async with self._lock:
-            await self._teardown()
+            return await self._teardown()
 
-    async def _teardown(self) -> None:
-        """The unwinding itself. Assumes the lock is held."""
+    @property
+    def last_shutdown(self) -> ShutdownReport | None:
+        """The most recent teardown's outcome, for anyone who asks later."""
+        return self._last_shutdown
+
+    async def _teardown(self) -> ShutdownReport:
+        """The unwinding itself. Assumes the lock is held.
+
+        Every step is independent and bounded. Independent because a context
+        whose ``close`` raises must not prevent the browser from closing —
+        stopping early is how a failed teardown leaves Chromium running.
+        Bounded because a step that *hangs* is worse than one that raises: it
+        would hold JARVIS's exit open forever. Abandoning a hung step costs
+        nothing, since stopping the Playwright driver terminates the browser
+        regardless of whether ``browser.close()`` ever returned.
+        """
+        report = ShutdownReport()
+        budget = self.settings.shutdown_timeout_seconds
+
         for page_id, handle in list(self._pages.items()):
             try:
-                await handle.page.close()
+                await asyncio.wait_for(handle.page.close(), timeout=budget)
+                report.pages_closed += 1
             except Exception as exc:
-                log.debug("browser_page_close_failed", page_id=page_id, error=str(exc))
+                log.debug("browser_page_close_failed", page_id=page_id,
+                          error=str(exc))
         self._pages.clear()
 
         # Innermost first: a context outliving its browser is not a thing
-        # Playwright allows, but a browser outliving the process is.
+        # Playwright allows, but a browser outliving the process is. The
+        # driver goes last on purpose — it is the backstop that kills the
+        # browser if the browser's own close did not.
         for label, resource, closer in (
             ("context", self._context, "close"),
             ("browser", self._browser, "close"),
@@ -423,8 +626,12 @@ class BrowserService:
             if resource is None:
                 continue
             try:
-                await getattr(resource, closer)()
+                await asyncio.wait_for(getattr(resource, closer)(), timeout=budget)
+            except asyncio.TimeoutError:
+                report.timed_out.append(label)
+                log.warning(f"browser_{label}_close_timed_out", seconds=budget)
             except Exception as exc:
+                report.failures[label] = str(exc)
                 log.warning(f"browser_{label}_close_failed", error=str(exc))
 
         had_browser = self._browser is not None
@@ -433,5 +640,7 @@ class BrowserService:
         self._playwright = None
         self._disconnected_reason = None
         self.capabilities.verified = False
+        self._last_shutdown = report
         if had_browser:
-            log.info("browser_shutdown")
+            log.info("browser_shutdown", **report.describe())
+        return report

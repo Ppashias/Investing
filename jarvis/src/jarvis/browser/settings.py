@@ -49,6 +49,14 @@ class BrowserSettings:
     #: navigation itself arrives in a later step.
     navigation_timeout_seconds: float = 20.0
 
+    #: How long each teardown step gets before it is abandoned. Short on
+    #: purpose: shutdown runs on the way out of the process, and a
+    #: ``browser.close()`` that never returns would hang JARVIS's exit with a
+    #: Chromium still running — the exact outcome shutdown exists to prevent.
+    #: Abandoning the step and continuing to the next one is strictly better,
+    #: because stopping the Playwright driver kills the browser anyway.
+    shutdown_timeout_seconds: float = 10.0
+
     #: How many pages may exist at once. A cap rather than a limit on what is
     #: reachable: an agent that has opened twenty tabs has lost track of what
     #: it is doing, and each page is a live renderer process.

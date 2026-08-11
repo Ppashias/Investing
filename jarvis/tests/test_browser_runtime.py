@@ -62,11 +62,6 @@ def browser_module(name: str):
     return importlib.import_module(f"jarvis.browser.{name}")
 
 
-async def _probe() -> tuple[bool, str]:
-    report = await detect(BrowserSettings())
-    return report.available, report.reason
-
-
 def _environment_chromium() -> Path | None:
     """A Chromium this machine has, found from the environment, not hard-coded.
 
@@ -90,27 +85,56 @@ def _environment_chromium() -> Path | None:
     return None
 
 
+_UNRESOLVED = object()
+_resolved: object = _UNRESOLVED
+
+
+async def resolve_chromium() -> tuple[BrowserSettings | None, str]:
+    """Work out once how to launch a real browser here, and remember it.
+
+    Cached across the whole test session because ``detect`` starts a Playwright
+    driver process to ask Playwright where its Chromium is. Roughly thirty
+    tests want a browser, and paying a node process launch per test is pure
+    subprocess churn on a machine that is simultaneously starting Chromiums and
+    an Xvfb.
+
+    ``--no-sandbox`` and ``--disable-dev-shm-usage`` are not defaults in
+    :class:`BrowserSettings` and must not become them. They are set here
+    because CI containers run unprivileged and can have a small ``/dev/shm`` —
+    facts about the test machine, not about JARVIS.
+    """
+    global _resolved
+    if _resolved is not _UNRESOLVED:
+        return _resolved  # type: ignore[return-value]
+
+    args = ("--no-sandbox", "--disable-dev-shm-usage")
+    report = await detect(BrowserSettings())
+    if report.available:
+        _resolved = (BrowserSettings(headless=True, launch_args=args), report.reason)
+    else:
+        fallback = _environment_chromium()
+        if fallback is None:
+            _resolved = (
+                None,
+                f"{report.reason} (and none found under PLAYWRIGHT_BROWSERS_PATH)",
+            )
+        else:
+            _resolved = (
+                BrowserSettings(
+                    headless=True, executable_path=fallback, launch_args=args
+                ),
+                report.reason,
+            )
+    return _resolved  # type: ignore[return-value]
+
+
 @pytest.fixture
 async def chromium() -> BrowserSettings:
-    """Settings for a real browser, or an explicit skip saying why not.
-
-    ``--no-sandbox`` is not a default in :class:`BrowserSettings` and must not
-    become one; it is set here because CI containers run unprivileged, which is
-    a fact about the test machine rather than about JARVIS.
-    """
-    ok, reason = await _probe()
-    if ok:
-        return BrowserSettings(headless=True, launch_args=("--no-sandbox",))
-
-    fallback = _environment_chromium()
-    if fallback is None:
-        pytest.skip(
-            f"No usable Chromium on this machine: {reason} "
-            "(and none found under PLAYWRIGHT_BROWSERS_PATH)"
-        )
-    return BrowserSettings(
-        headless=True, executable_path=fallback, launch_args=("--no-sandbox",)
-    )
+    """Settings for a real browser, or an explicit skip saying why not."""
+    settings, reason = await resolve_chromium()
+    if settings is None:
+        pytest.skip(f"No usable Chromium on this machine: {reason}")
+    return settings
 
 
 @pytest.fixture

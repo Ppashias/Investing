@@ -15,7 +15,12 @@ from jarvis.browser.capabilities import (
     BrowserUnavailable,
     detect,
 )
-from jarvis.browser.service import BrowserService, LaunchOutcome, PageHandle
+from jarvis.browser.service import (
+    BrowserService,
+    LaunchOutcome,
+    PageHandle,
+    ShutdownReport,
+)
 from jarvis.browser.settings import BrowserSettings
 
 __all__ = [
@@ -27,5 +32,6 @@ __all__ = [
     "BrowserUnavailable",
     "LaunchOutcome",
     "PageHandle",
+    "ShutdownReport",
     "detect",
 ]
