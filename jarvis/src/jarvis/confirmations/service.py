@@ -65,7 +65,15 @@ class ConfirmationRequest:
     title: str
     body: str
     tool_name: str
+    #: The real arguments. The fingerprint is computed over these, so they must
+    #: be exactly what the caller will present again on the retry.
     arguments: dict[str, Any]
+    #: What gets *stored* in the record, when that must differ. Only tools
+    #: declaring ``redact_arguments`` set this — a value the user is typing into
+    #: a web page has no business surviving in the database after the approval
+    #: is spent. The fingerprint is unaffected, so matching still works on the
+    #: real arguments; this is the display copy alone.
+    stored_arguments: dict[str, Any] | None = None
     risk_level: RiskLevel = RiskLevel.MEDIUM
     reversible: bool = True
     request_id: str | None = None
@@ -109,7 +117,13 @@ class ConfirmationService:
             body=req.body,
             action={
                 "tool": req.tool_name,
-                "arguments": req.arguments,
+                # Never ``req.arguments`` directly: see ``stored_arguments``.
+                # The fingerprint above is the real one either way.
+                "arguments": (
+                    req.arguments
+                    if req.stored_arguments is None
+                    else req.stored_arguments
+                ),
                 "fingerprint": fingerprint,
                 "reason": req.reason,
             },

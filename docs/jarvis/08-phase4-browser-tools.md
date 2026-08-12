@@ -1,10 +1,13 @@
-# Phase 4, Step 5 — the browser tool surface
+# Phase 4, Steps 5–6 — the browser tool surface and its integration
 
-**Status:** implemented. Nine tools, registered and reachable by the agent.
-The control plane they sit on is Step 4, documented in `07-phase4-control-plane.md`.
+**Status:** implemented. Nine tools, registered, reachable by the agent, and
+driven end to end through the real agent loop. The control plane they sit on is
+Step 4, documented in `07-phase4-control-plane.md`.
 
 This document is about the tools: what they do, what they refuse, and where the
-boundary between JARVIS's own facts and a web page's claims is drawn.
+boundary between JARVIS's own facts and a web page's claims is drawn. §10
+onwards covers the Step 6 integration — how the model reaches these tools, how
+an ASK on a navigation origin now suspends and resumes, and what is recorded.
 
 ---
 
@@ -54,7 +57,7 @@ UrlPolicy.check(url)
     ↓  refuse → structured verdict, nothing launched, nothing navigated
 BrowserPolicy.authorize(operation, origin=decision.origin)
     ↓  DENY  → PermissionDeniedError, audited
-    ↓  ASK   → confirmation (interactions) / fail closed (navigation, see §7)
+    ↓  ASK   → suspend, ask the user, resume on approval (§10)
 ToolExecutor  →  operations.<action>()
 ```
 
@@ -100,10 +103,14 @@ deleting the check, would skip the engine altogether. The tools branch on all
 three outcomes (`denied` / `needs_confirmation` / proceed) instead.
 
 The executor obtains approval *before* the handler runs, fingerprint-bound to
-the exact arguments. The handler then calls the policy with
-`confirmed_by_caller=True`, which suppresses the question but never the answer:
-DENY still refuses, and the approval is written to the activity log so "who
-allowed this?" is answerable from the log alone.
+the exact arguments, and records the fact on `ctx.confirmed`. The handler reads
+that flag — it does not set it, and there is no parameter to pass. A caller that
+forgot one would ask the user twice; a caller that hardcoded one would claim an
+approval it never had.
+
+The flag suppresses the question, never the answer: DENY still refuses, and the
+approval is written to the activity log so "who allowed this?" is answerable
+from the log alone.
 
 Approving a click on one element does not approve a click on another — the
 fingerprint covers the element reference, and a test proves the second click
@@ -247,21 +254,20 @@ tools: nobody has established the browser is unusable, and the call itself
 probes and refuses with a reason. Withholding until something has probed would
 hide the tools on a healthy machine until an unrelated call warmed the cache.
 
-### A known divergence: ASK on a navigation origin
+### ASK on a navigation origin — resolved in Step 6A
 
-An origin the operator marked ASK for READ currently **fails closed** — the
-navigation is refused rather than suspended for approval.
+Step 5 shipped a gap here and named it: an origin the operator marked ASK for
+READ **failed closed**, refusing rather than asking. That was safe and wrong.
+The operator's instruction was "ask me"; JARVIS heard "never".
 
-This is deliberate and recorded rather than hidden. The executor creates
-confirmations *before* the handler runs, so a handler cannot raise one the user
-could ever answer; it would suspend the turn against a confirmation row that
-does not exist. Refusing is the safe half of the intended behaviour, and the
-security property that matters holds: an ASK origin is never browsed unattended.
-Making it *ask* requires an executor change — a handler-initiated confirmation —
-which belongs to Step 6, not here.
+The cause was structural. The executor decides confirmations before the handler
+runs, on the `(capability, resource)` pair the tool declares — and a browser
+navigation's real resource is the *destination origin*, which does not exist
+until the URL argument has been parsed and checked. There was nothing to ask
+about in advance, and a handler had no way to raise a question the user could
+answer.
 
-`browser_click` and `browser_fill` are unaffected: they declare
-`requires_confirmation`, so the executor asks before the handler runs.
+§10 describes the mechanism that closed it.
 
 ---
 
@@ -318,3 +324,232 @@ these tests. Navigation also clears the registry's entries, so lookup fails
 before the generation check is reached. The invariant is covered by Step 4's
 `test_browser_security.py`; it is not covered here, and this document says so
 rather than letting the mutation table imply otherwise.
+
+---
+
+# Step 6 — integration
+
+## 10. Mid-flight confirmation (6A)
+
+Some authorisation questions cannot be asked before a handler runs. The
+executor decides on the `(capability, resource)` pair a tool *declares*; a
+browser navigation's real resource is the destination origin, which exists only
+after the URL argument has been parsed and checked against the URL policy.
+
+Two bad options were available and both were rejected. Declaring
+`requires_confirmation` on `browser_navigate` would ask about every navigation,
+which trains the user to approve everything — the failure mode that makes
+confirmations worthless. Failing closed, which is what Step 5 did, answers "ask
+me" with "never".
+
+The mechanism is one signal exception, `tools.base.ConfirmationNeeded`:
+
+```
+handler runs
+    ↓  reaches an ASK it cannot answer
+raise ConfirmationNeeded(reason, prompt=…)
+    ↓
+ToolExecutor._satisfy_mid_flight
+    ├─ approval already exists → consume it, set ctx.confirmed, re-invoke once
+    └─ no approval → ConfirmationService.request(...) → suspend the turn
+```
+
+Three properties are what make this an extension of the existing machinery
+rather than a second one:
+
+- **Same service, same fingerprint.** The confirmation is created by the same
+  `ConfirmationService`, keyed by the same hash over `(tool name, arguments)`.
+  An approval to navigate to one URL is not an approval to navigate to another,
+  and a test pins exactly that.
+- **Same suspension.** It raises the same `ConfirmationRequiredError` the
+  orchestrator already knows how to suspend on, so resume works with no new
+  code: the approval persists, the model re-requests on the next turn, and
+  `find_approval` matches. An approval survives a restart because nothing is
+  held in memory.
+- **Single-use, still.** The approval is consumed on the retry. Asking again for
+  the same URL asks again.
+
+### The handler contract
+
+**Raise before doing anything.** The executor answers the signal by re-invoking
+the handler, so everything before the raise runs twice. Reads, parses and policy
+checks are fine; side effects are not. Exactly one retry is allowed — a second
+signal from the same call is a bug, not a question, and surfaces as
+`ToolExecutionError`.
+
+### What an approval cannot do
+
+`ctx.confirmed` is evidence that a question was answered, not a licence. It is
+checked *after* the DENY branch and has no effect on anything upstream. Four
+tests hold the line, each constructed as an attack rather than as a happy path:
+
+| Attack | Outcome |
+|---|---|
+| Get an approval while ASK, then the operator sets DENY | refused |
+| Get an approval, then localhost is switched off | refused by URL policy |
+| Spend an approval on a different URL | asks again |
+| Spend an approval on a different element | asks again |
+
+Taint is not on that list because it cannot be: taint is an *input* to the
+permission decision, so a tainted turn produces ASK and an ASK still requires an
+approval. There is no ordering in which taint gets skipped.
+
+---
+
+## 11. Agent registration (6C)
+
+The nine tools reach the model through the ordinary path and no other:
+
+```
+ToolRegistry.enabled()  →  PlanStage._runnable_here  →  provider tool specs
+                        →  model asks  →  ToolExecutor  →  handler
+```
+
+There is no side channel. `BrowserService` is passed to `ExecuteStage` as one
+of the `extras` a `ToolContext` carries, so a handler can reach it and nothing
+else can; the browser lifecycle (launch, shutdown) is deliberately not exposed
+as a tool, and a test asserts it stays that way.
+
+Two structural tests keep the harness honest about this: one asserts the
+orchestrator actually puts `browser` into `extras`, and one asserts the keys the
+tests build by hand are the keys the loop builds. Without them, every browser
+test could be exercising a context that does not exist at runtime.
+
+---
+
+## 12. Capability withholding (6E)
+
+Truthfulness about capability is enforced in `PlanStage._runnable_here`, the
+same mechanism the computer tools use. Browser action tools are withheld when:
+
+- the operator switched browsing off, or
+- the cached capability report says `UNAVAILABLE` or `DISABLED`.
+
+`browser_status` is never withheld — it is what explains the others' absence.
+
+The check reads the *cached* report and never probes: `detect()` starts a driver
+process and planning happens every turn. `UNPROBED` therefore offers the tools,
+because nobody has established they are broken and the call itself probes and
+refuses with a reason.
+
+Behaviour with no Chromium, verified through the loop:
+
+- the action tools are absent from the turn's tool set, so the model is not
+  invited to try;
+- `browser_status` answers truthfully, with no filesystem or executable paths;
+- if the model names a withheld tool anyway, it gets a structured error — the
+  orchestrator does not crash, and **no confirmation is raised for something
+  that cannot happen**. Approving an impossible action is how approvals become
+  ceremonial.
+
+---
+
+## 13. Audit (6B)
+
+Every browser operation writes one `ActivityKind.BROWSER_ACTION` row through the
+existing `ActivityService` — the same service and session the executor already
+uses for `TOOL_CALL` and `PERMISSION_DECISION`. There is no second audit system.
+
+| Operation | Statuses seen |
+|---|---|
+| `navigate` (open and navigate) | `OK`, `REFUSED`, `FAILED` |
+| `read` / `interact` (the authorisation itself) | `DENIED`, `AWAITING_CONFIRMATION`, `APPROVED` |
+| `inspect`, `extract`, `close_page` | `OK` |
+| `click` | `OK`, `FAILED` |
+| `fill` | `OK`, `REFUSED`, `FAILED` |
+
+Detail carries the operation, the origin, the URL or element description, the
+permission reason and the applied rules — enough to answer "what did it do, to
+whom, and on whose authority".
+
+### What is redacted, and where it is not
+
+`browser_fill` declares `redact_arguments=("text",)`. Redaction happens inside
+`ToolExecutor` via `Tool.for_audit()`, so it applies to:
+
+- the `ToolExecution.arguments` row,
+- the `ActivityLog` detail for `TOOL_CALL`,
+- and, added in Step 6, the arguments stored in `Confirmation.action`.
+
+That last one was a real leak found by writing the test the brief asked for
+rather than assuming the answer: a value the model tried to type — including a
+password it was about to be refused — was persisted verbatim in the confirmation
+record. The fix separates `arguments` (used for the fingerprint, never stored)
+from `stored_arguments` (stored, redacted). Matching is unaffected, because
+`find_approval` recomputes the fingerprint from the caller's real arguments.
+
+**`Confirmation.body` is deliberately not redacted.** The user must see what
+they are approving; "type X into the search box" without X is asking someone to
+consent to something they cannot see. The consequence is that a pending
+confirmation holds the value in prose, and for a credential field that value
+survives even though the fill is ultimately refused — the confirmation is
+created before the DOM check that refuses it. Scrubbing the body once an
+approval is consumed or refused would close this, and it is a change to the
+global confirmation contract, so it is recorded here rather than made as a side
+effect of Step 6.
+
+---
+
+## 14. Audit failure (6G)
+
+The existing global contract is that **audit failures are swallowed**.
+`ActivityService.record` catches every exception, logs a warning, and returns
+`None`; the operation proceeds. Step 6 does not change this, per instruction.
+
+Stated plainly, because it is a real consequence: a browser action can succeed
+with no `BROWSER_ACTION` row behind it if the database rejects the write. What
+it cannot do is turn a refusal into permission — refusals are enforced by a
+raised exception, not by a log line — and that is pinned by a test that makes
+the audit path raise outright and checks the DENY still holds.
+
+One latent inconsistency is recorded rather than changed: the browser `_audit`
+helper would propagate an exception if `record` ever raised, making it *stricter*
+than the global contract. It never fires today because `record` does not raise.
+The two differ, and a change to either should be made knowing the other exists.
+
+---
+
+## 15. What Step 6 proves, and where
+
+`test_browser_agent_loop.py` drives everything through `Orchestrator.handle`.
+No test calls a handler, and none calls the executor directly.
+
+| Flow | What it pins |
+|---|---|
+| Read-only browsing | open + extract in one turn, no confirmation, real Chromium, executor rows for both calls |
+| Navigation ASK | suspends, creates a confirmation, resumes on approval, audits `AWAITING_CONFIRMATION` → `APPROVED` |
+| Navigation DENY | no page, no confirmation *at all*, model gets a refusal, `DENIED` audited |
+| Poisoned page | taint starts off, latches on extract, survives a clean tool in between, and the click the page demanded still meets a confirmation under an over-broad grant |
+| Fill | inspect → fill → suspend → approve → typed; value absent from every audit store |
+| Credentials | `type="password"` and `type="text"` named `otp_code` both refused; an approval for the innocent field does not transfer to the password one |
+| No Chromium | tools withheld, status truthful, stray call errors cleanly, no confirmation, no crash |
+
+Mutation results for Step 6 — each mutation applied, tests run, then reverted:
+
+| Mutation | Tests failed |
+|---|---|
+| S1 — ASK treated as ALLOW | 6 |
+| S2 — DENY ignored | 6 |
+| S3 — confirmation skipped in the executor | 8 |
+| S4 — browser audit skipped | 15 |
+| S5 — taint latch replaced by assignment | 2 |
+
+S3 is worth a note: with the executor's confirmation skipped entirely, the
+browser layer *still* demands one, because `_authorize` raises
+`ConfirmationNeeded` independently. That is defence in depth rather than
+redundancy — two different mechanisms would both have to fail.
+
+---
+
+## 16. Platform status
+
+- **Linux** — verified. Real Chromium, real HTTP server, real navigation,
+  clicks and fills, on every test described above.
+- **Windows** — `UNVERIFIED — WINDOWS RUNTIME`. Nothing here was executed on
+  Windows. Chromium resolution, path handling and process lifecycle differ.
+- **macOS** — unverified. Not executed.
+
+Nothing in this document is claimed on the strength of source inspection alone
+except where it says so: the "no Playwright in tools" rule and the "no
+credential store" rule are structural assertions over source text, and are
+labelled as such.

@@ -48,7 +48,56 @@ class ToolContext:
     #: Set when untrusted content is in scope. Handlers may tighten their own
     #: behaviour; the permission engine already escalates on it.
     tainted: bool = False
+    #: True once the executor holds the user's approval for *this exact call*.
+    #:
+    #: Evidence, not permission. It says a confirmation was satisfied — it does
+    #: not say the action is allowed, and a handler must still run its own
+    #: checks. Set by :class:`~jarvis.tools.executor.ToolExecutor` only: either
+    #: when the tool-level confirmation was satisfied before the handler ran,
+    #: or when a :class:`ConfirmationNeeded` signal was answered mid-flight.
+    #: Nothing else writes it, and a handler that sets it is lying to itself.
+    confirmed: bool = False
     extras: dict[str, Any] = field(default_factory=dict)
+
+
+class ConfirmationNeeded(Exception):
+    """A handler discovered mid-flight that this call needs the user's approval.
+
+    Some authorisation questions cannot be asked before the handler runs. The
+    executor decides on ``(capability, resource)`` pairs known from the tool's
+    declaration; a browser navigation's real resource is the *origin*, which
+    only exists once the URL argument has been parsed and checked. Before this
+    signal the only options were to ask about every navigation — training the
+    user to click through — or to fail closed on ASK, which is what Step 5 did
+    and what this replaces.
+
+    Raising it hands the question back to the executor, which answers it with
+    the machinery it already owns: the same :class:`ConfirmationService`, the
+    same fingerprint over ``(tool name, arguments)``, the same single-use
+    approval, the same suspension the orchestrator knows how to resume. There
+    is deliberately no second confirmation system here — this class carries a
+    reason and nothing else.
+
+    **The contract for handlers: raise before doing anything.** The executor
+    answers the signal by re-invoking the handler, so everything before the
+    raise runs twice. Reads, parses and policy checks are fine; anything that
+    changes the world is not.
+    """
+
+    def __init__(
+        self,
+        reason: str,
+        *,
+        prompt: str | None = None,
+        detail: dict[str, Any] | None = None,
+    ) -> None:
+        super().__init__(reason)
+        self.reason = reason
+        #: Shown to the user in place of the tool's generic confirmation body.
+        #: Worth setting: "Let JARVIS browse example.com?" is a question someone
+        #: can answer, and the generic argument dump is not.
+        self.prompt = prompt
+        self.detail = detail or {}
 
 
 @dataclass(slots=True)

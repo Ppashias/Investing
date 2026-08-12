@@ -125,6 +125,13 @@ class StubProvider(AIProvider):
         nxt = self.responses.pop(0)
         if isinstance(nxt, Exception):
             raise nxt
+        if callable(nxt):
+            # A lazy response, resolved at the moment the model would speak.
+            # Needed for multi-step turns whose later calls reference an
+            # identifier the earlier ones generated — a browser page_id is
+            # issued at open time, so a statically queued follow-up could only
+            # ever guess it. The callable reads the real state instead.
+            nxt = nxt(request)
         return nxt
 
     async def stream(  # type: ignore[override]

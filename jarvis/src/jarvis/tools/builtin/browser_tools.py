@@ -34,12 +34,21 @@ anything, and saying it achieves nothing.
 
 ## Confirmation
 
-``browser_click`` and ``browser_fill`` declare ``requires_confirmation``. The
-executor obtains the user's approval, fingerprint-bound to the exact element
-and text, *before* the handler runs; the handler then calls the policy with
-``confirmed_by_caller`` so the same act is not questioned twice. That is the
-shape the Obsidian write tools already use, and it exists because doing it the
-obvious way produced two prompts for one action.
+Two shapes, one machinery.
+
+``browser_click`` and ``browser_fill`` declare ``requires_confirmation``, so the
+executor obtains the user's approval — fingerprint-bound to the exact element
+and text — *before* the handler runs. That is the shape the Obsidian write
+tools already use, and it exists because doing it the obvious way produced two
+prompts for one action.
+
+Navigation cannot work that way. Its real resource is the destination *origin*,
+which does not exist until the URL argument has been parsed and checked, so the
+executor has nothing to ask about in advance. Those handlers raise
+``ConfirmationNeeded`` instead, and the executor answers it with the same
+service, the same fingerprint and the same suspension (Step 6A). Either way the
+handler learns the answer from ``ctx.confirmed`` and never from a flag it set
+itself.
 """
 
 from __future__ import annotations
@@ -57,7 +66,12 @@ from jarvis.browser.policy import (
 from jarvis.browser.urls import UrlPolicy
 from jarvis.db.models import ActivityKind, Capability, RiskLevel
 from jarvis.errors import PermissionDeniedError
-from jarvis.tools.base import ToolContext, ToolResult, tool
+from jarvis.tools.base import (
+    ConfirmationNeeded,
+    ToolContext,
+    ToolResult,
+    tool,
+)
 
 _UNAVAILABLE = (
     "The browser is not available. Call browser_status to find out why — it is "
@@ -121,12 +135,17 @@ async def _audit(
     )
 
 
+#: How to say each operation in a question the user is being asked.
+_PHRASING = {
+    BrowserOperation.READ: "browse",
+    BrowserOperation.INTERACT: "interact with",
+}
+
+
 async def _authorize(
     ctx: ToolContext,
     operation: BrowserOperation,
     origin: str,
-    *,
-    confirmed_by_caller: bool = False,
 ) -> None:
     """Ask the permission engine, and act on all three answers.
 
@@ -135,10 +154,15 @@ async def _authorize(
     grant, and a tool that treated "not allowed" as "stop" would never act
     while a tool that dropped the check would never ask.
 
-    ``confirmed_by_caller`` says the executor has already obtained the user's
-    approval for this exact call. It suppresses the question, never the answer:
-    DENY still refuses, and the approval is recorded so "who allowed this?" is
-    answerable from the log alone.
+    Whether the user has already approved is read from ``ctx.confirmed`` rather
+    than passed in. There is deliberately no parameter: a caller that forgot it
+    would ask the user twice, and a caller that hardcoded it would claim an
+    approval it never had. The executor is the only thing that knows, and it is
+    the only thing that writes it.
+
+    An approval suppresses the question, never the answer. DENY still refuses,
+    and the approval is recorded so "who allowed this?" is answerable from the
+    log alone.
     """
     auth = await BrowserPolicy(ctx.session).authorize(
         operation, origin=origin, user_id=ctx.user_id, tainted=ctx.tainted
@@ -159,23 +183,32 @@ async def _authorize(
             user_message=auth.decision.reason,
         )
 
-    if auth.needs_confirmation and not confirmed_by_caller:
-        # No browser tool should reach here: the two that can produce an ASK
-        # declare requires_confirmation, so the executor asks first. Refusing
-        # rather than proceeding means a tool added later without that flag
-        # fails closed instead of acting unattended.
+    if auth.needs_confirmation and not ctx.confirmed:
+        # Hand the question up. The executor owns confirmations; this says what
+        # is being asked and about which origin, and the answer comes back as
+        # ``ctx.confirmed`` on the re-invocation.
+        #
+        # Step 5 refused here instead, because a handler had no way to ask. The
+        # refusal was safe — an ASK origin was never browsed unattended — but it
+        # was the wrong answer to the operator's actual instruction, which was
+        # "ask me", not "never".
+        #
+        # Nothing has happened yet at this point in any caller: the URL has
+        # been checked and the page looked up, both reads. That is what makes
+        # the executor's re-invocation safe.
         await _audit(
-            ctx, operation.value, status="DENIED",
-            summary=f"Browser {operation.value} needs approval and none was asked",
-            detail={"origin": origin, "reason": auth.decision.reason},
+            ctx, operation.value, status="AWAITING_CONFIRMATION",
+            summary=f"Browser {operation.value} on {origin} needs approval",
+            detail={"origin": origin, "reason": auth.decision.reason,
+                    "rules": auth.decision.applied_rules},
         )
-        raise PermissionDeniedError(
-            f"Browser {operation.value} on {origin} requires confirmation",
-            tool=f"browser:{operation.value}",
-            user_message=(
-                f"Acting on {origin} needs your approval and this path cannot "
-                "ask for it."
+        raise ConfirmationNeeded(
+            f"Browser {operation.value} on {origin}: {auth.decision.reason}",
+            prompt=(
+                f"Let JARVIS {_PHRASING.get(operation, operation.value)} "
+                f"{origin}?"
             ),
+            detail={"origin": origin, "operation": operation.value},
         )
 
     if auth.needs_confirmation:
@@ -687,9 +720,7 @@ async def browser_click(*, ctx: ToolContext, page_id: str, element_id: str) -> T
     except BrowserError as exc:
         return ToolResult.error(exc.user_message, page_id=page_id)
 
-    await _authorize(
-        ctx, BrowserOperation.INTERACT, origin, confirmed_by_caller=True
-    )
+    await _authorize(ctx, BrowserOperation.INTERACT, origin)
 
     try:
         described = await operations.click(
@@ -760,9 +791,7 @@ async def browser_fill(
     except BrowserError as exc:
         return ToolResult.error(exc.user_message, page_id=page_id)
 
-    await _authorize(
-        ctx, BrowserOperation.INTERACT, origin, confirmed_by_caller=True
-    )
+    await _authorize(ctx, BrowserOperation.INTERACT, origin)
 
     try:
         described = await operations.fill(

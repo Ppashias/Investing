@@ -45,7 +45,7 @@ from jarvis.errors import (
 )
 from jarvis.logging import get_logger, scrub_text, timed
 from jarvis.permissions.engine import PermissionEngine, PermissionRequest
-from jarvis.tools.base import Tool, ToolContext, ToolResult
+from jarvis.tools.base import ConfirmationNeeded, Tool, ToolContext, ToolResult
 from jarvis.tools.registry import ToolRegistry
 
 log = get_logger(__name__)
@@ -233,6 +233,12 @@ class ToolExecutor:
         if approval is not None:
             await self.confirmations.consume(approval)
             record.confirmation_id = approval.id
+            # Evidence for the handler. Interaction tools used to assert this
+            # themselves — passing ``confirmed_by_caller=True`` on the strength
+            # of their own ``requires_confirmation`` flag — which was true but
+            # unchecked. Recording it here makes it something the handler can
+            # read rather than something it assumes.
+            ctx.confirmed = True
             log.info(
                 "confirmation_satisfied",
                 tool=tool.name,
@@ -247,6 +253,7 @@ class ToolExecutor:
                 body=tool.confirmation_text(call.arguments),
                 tool_name=tool.name,
                 arguments=call.arguments,
+                stored_arguments=tool.for_audit(call.arguments),
                 risk_level=tool.risk_level,
                 reversible=tool.reversible,
                 request_id=ctx.request_id,
@@ -274,6 +281,123 @@ class ToolExecutor:
             user_message=f"I need your approval before I can {tool.name}.",
         )
 
+    async def _run_handler(
+        self,
+        tool: Tool,
+        call: ToolCall,
+        ctx: ToolContext,
+        record: ToolExecution,
+    ) -> Any:
+        """Call the handler, answering a mid-flight confirmation request once.
+
+        Most authorisation is settled before the handler runs. A few questions
+        cannot be: a browser navigation's real resource is the destination
+        origin, which does not exist until the URL argument has been parsed and
+        checked against the URL policy. Such a handler raises
+        :class:`ConfirmationNeeded` and this answers it — with the confirmation
+        machinery :meth:`_authorise` already uses, not a second one.
+
+        Exactly one retry. The handler contract says the signal is raised
+        before any side effect, so re-running is safe; a *second* signal from
+        the same call means the handler is asking about something it did not
+        establish the first time, which is a bug rather than a question, and it
+        surfaces as one.
+        """
+        try:
+            return await asyncio.wait_for(
+                tool.handler(ctx=ctx, **call.arguments),
+                timeout=self.timeout_seconds,
+            )
+        except ConfirmationNeeded as signal:
+            await self._satisfy_mid_flight(tool, call, ctx, record, signal)
+
+        try:
+            return await asyncio.wait_for(
+                tool.handler(ctx=ctx, **call.arguments),
+                timeout=self.timeout_seconds,
+            )
+        except ConfirmationNeeded as second:
+            raise ToolExecutionError(
+                f"Tool '{tool.name}' asked for confirmation twice in one call: "
+                f"{second.reason}. A handler must reach the same decision once "
+                "the approval is in hand.",
+                details={"tool": tool.name},
+            ) from second
+
+    async def _satisfy_mid_flight(
+        self,
+        tool: Tool,
+        call: ToolCall,
+        ctx: ToolContext,
+        record: ToolExecution,
+        signal: "ConfirmationNeeded",
+    ) -> None:
+        """Find or request the approval the handler asked for.
+
+        Returns normally only when the approval is in hand and ``ctx.confirmed``
+        is set; otherwise it raises the suspension the orchestrator resumes
+        from. The fingerprint is over ``(tool name, arguments)``, exactly as it
+        is for a tool-level confirmation, so an approval to navigate to one URL
+        is not an approval to navigate to another.
+        """
+        approval = await self.confirmations.find_approval(
+            ctx.user_id, tool.name, call.arguments
+        )
+        if approval is not None:
+            await self.confirmations.consume(approval)
+            record.confirmation_id = approval.id
+            ctx.confirmed = True
+            log.info(
+                "confirmation_satisfied_mid_flight",
+                tool=tool.name,
+                confirmation_id=approval.id,
+            )
+            return
+
+        confirmation = await self.confirmations.request(
+            ConfirmationRequest(
+                user_id=ctx.user_id,
+                title=f"Allow {tool.name}?",
+                # The handler knows what it is asking about; the tool's generic
+                # template does not. "Let JARVIS browse example.com?" is a
+                # question someone can answer.
+                body=signal.prompt or tool.confirmation_text(call.arguments),
+                tool_name=tool.name,
+                arguments=call.arguments,
+                stored_arguments=tool.for_audit(call.arguments),
+                risk_level=tool.risk_level,
+                reversible=tool.reversible,
+                request_id=ctx.request_id,
+                conversation_id=ctx.conversation_id,
+                reason=signal.reason,
+            )
+        )
+        record.status = ExecutionStatus.AWAITING_CONFIRMATION
+        record.confirmation_id = confirmation.id
+        await self.session.flush()
+
+        await self.activity.record(
+            ActivityKind.CONFIRMATION_REQUESTED,
+            summary=f"Waiting for approval: {tool.name}",
+            actor="tool_executor",
+            detail={
+                "confirmation_id": confirmation.id,
+                "tool": tool.name,
+                "reason": signal.reason,
+                **signal.detail,
+            },
+            request_id=ctx.request_id,
+            conversation_id=ctx.conversation_id,
+            tool_name=tool.name,
+            status="AWAITING_CONFIRMATION",
+        )
+        raise ConfirmationRequiredError(
+            f"Tool '{tool.name}' requires confirmation: {signal.reason}",
+            confirmation_id=confirmation.id,
+            user_message=signal.prompt
+            or f"I need your approval before I can {tool.name}.",
+        )
+
     async def _invoke(
         self,
         tool: Tool,
@@ -284,10 +408,7 @@ class ToolExecutor:
     ) -> ToolOutcome:
         with timed() as clock:
             try:
-                result = await asyncio.wait_for(
-                    tool.handler(ctx=ctx, **call.arguments),
-                    timeout=self.timeout_seconds,
-                )
+                result = await self._run_handler(tool, call, ctx, record)
             except asyncio.TimeoutError as exc:
                 raise ToolTimeoutError(
                     f"Tool '{tool.name}' exceeded {self.timeout_seconds}s",

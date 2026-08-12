@@ -727,26 +727,100 @@ async def test_a_denied_origin_never_navigates(browsing, site) -> None:
     assert ("DENIED", "read") in rows
 
 
-async def test_a_confirmation_required_origin_does_not_navigate(
+async def test_a_confirmation_required_origin_suspends_then_proceeds(
     browsing, site
 ) -> None:
-    """ASK on a *navigation* origin fails closed rather than proceeding.
+    """ASK on a *navigation* origin asks, and the answer is honoured (Step 6A).
 
-    Recorded deliberately, and reported as a conflict with the Step 5 brief,
-    which asks for a suspension here. The executor creates confirmations before
-    the handler runs, so a handler cannot raise one that the user could ever
-    answer — it would suspend the turn against a confirmation row that does not
-    exist. Refusing is the safe half of the intended behaviour; asking requires
-    the executor change that belongs to Step 6.
+    Step 5 refused here, because a handler had no way to raise a confirmation
+    the user could answer. That was safe and wrong: the operator said "ask me",
+    and JARVIS heard "never". ``ConfirmationNeeded`` closes the gap by handing
+    the question to the executor, which owns confirmations already.
 
-    What this test pins is the security property: an origin the operator marked
-    ASK is not browsed unattended.
+    The security property Step 5 pinned still holds and is asserted first:
+    nothing is navigated before the approval exists.
     """
     await grant_origin(browsing, site + "/", PermissionMode.ASK, Capability.READ)
 
+    with pytest.raises(ConfirmationRequiredError):
+        await run_tool(browsing, "browser_open", {"url": site + "/"})
+    assert browsing.browser.page_count == 0, "asked, and did not act while asking"
+
+    await confirm_last(browsing)
+
+    outcome = await run_tool(browsing, "browser_open", {"url": site + "/"})
+    assert outcome.result.is_error is False, outcome.result.content
+    assert browsing.browser.page_count == 1
+
+    rows = [(s, op) for s, op, _, _ in await activity_rows(browsing)]
+    assert ("AWAITING_CONFIRMATION", "read") in rows
+    assert ("APPROVED", "read") in rows
+
+
+async def test_the_approval_is_bound_to_the_url_that_was_asked_about(
+    browsing, site, other_site
+) -> None:
+    """Approving one navigation is not approving a different one.
+
+    The fingerprint is over (tool name, arguments), the same one the executor
+    uses everywhere else — so an approval for one URL cannot be spent on
+    another even within the same ASK origin.
+    """
+    await grant_origin(browsing, site + "/", PermissionMode.ASK, Capability.READ)
+    await grant_origin(
+        browsing, other_site + "/", PermissionMode.ASK, Capability.READ
+    )
+
+    with pytest.raises(ConfirmationRequiredError):
+        await run_tool(browsing, "browser_open", {"url": site + "/"})
+    await confirm_last(browsing)
+
+    # A different URL: the approval in hand must not cover it.
+    with pytest.raises(ConfirmationRequiredError):
+        await run_tool(browsing, "browser_open", {"url": other_site + "/form"})
+    assert browsing.browser.page_count == 0
+
+
+async def test_an_approval_cannot_turn_a_deny_into_a_yes(browsing, site) -> None:
+    """``confirmed_by_caller`` suppresses the question, never the answer.
+
+    Constructed as an attack: get an approval legitimately while the origin is
+    ASK, then have the operator switch it to DENY before it is spent. The
+    stored approval is still valid and still fingerprint-matched — and it must
+    not help.
+    """
+    await grant_origin(browsing, site + "/", PermissionMode.ASK, Capability.READ)
+    with pytest.raises(ConfirmationRequiredError):
+        await run_tool(browsing, "browser_open", {"url": site + "/"})
+    await confirm_last(browsing)
+
+    await grant_origin(browsing, site + "/", PermissionMode.DENY, Capability.READ)
+
     with pytest.raises(PermissionDeniedError):
         await run_tool(browsing, "browser_open", {"url": site + "/"})
+    assert browsing.browser.page_count == 0
 
+
+async def test_an_approval_cannot_survive_the_operator_switch(
+    browsing, site
+) -> None:
+    """Nor can it outrank the URL policy.
+
+    Approval in hand, then localhost is switched off. The URL policy runs
+    before any of this and does not consult confirmations, so the refusal is
+    the same one an unapproved call would get.
+    """
+    await grant_origin(browsing, site + "/", PermissionMode.ASK, Capability.READ)
+    with pytest.raises(ConfirmationRequiredError):
+        await run_tool(browsing, "browser_open", {"url": site + "/"})
+    await confirm_last(browsing)
+
+    browsing.browser.settings = replace(
+        browsing.browser.settings, allow_localhost=False
+    )
+    outcome = await run_tool(browsing, "browser_open", {"url": site + "/"})
+    assert outcome.result.is_error is True
+    assert outcome.result.data["verdict"] == "FORBIDDEN_DESTINATION"
     assert browsing.browser.page_count == 0
 
 
