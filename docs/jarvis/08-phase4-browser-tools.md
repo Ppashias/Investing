@@ -1,4 +1,4 @@
-# Phase 4, Steps 5–8 — the browser tool surface, its integration, and its audit
+# Phase 4, Steps 5–9 — the browser tool surface, its integration, and its audit
 
 **Status:** implemented. Nine tools, registered, reachable by the agent, driven
 end to end through the real agent loop, auditable after the fact, and verified
@@ -16,6 +16,8 @@ boundary between JARVIS's own facts and a web page's claims is drawn.
 - §§17–23 — multi-tool batches, interrupted batches, the audit over HTTP, the
   iteration bound, and one **confirmed limitation** in cross-turn taint
   (Step 8)
+- §§24–28 — the coverage review, the two exposure surfaces it found, and the
+  13-mutation battery (Step 9)
 
 ---
 
@@ -700,3 +702,122 @@ ever starts failing, the architecture changed and this section is stale.
 Unchanged from §16: **Linux VERIFIED**, Windows and macOS **UNVERIFIED**
 (nothing executed there). The API tests add no platform dependency — they run
 over the in-process test client.
+
+---
+
+# Step 9 — the complete local-browser suite
+
+Step 9 is a coverage review, not a feature. The question is not "does the
+browser work" but "is there anything it does that nothing checks".
+**No production code changed.**
+
+## 24. What the review found
+
+The inventory covered every operation, every lifecycle transition and every
+security boundary. Almost all of it was already covered, much of it several ways
+over. Two genuine gaps:
+
+**The live activity stream.** `/api/activity/stream` broadcasts every event to
+every connected client the moment it happens, and nothing tested it — not for
+browser events, not for anything. It matters more than the database surface
+Step 8 covered: a row in a database can be found and removed; a value pushed to
+a connected tab cannot. Redaction happens in the executor before
+`ActivityService.record` runs, so the bus *should* receive the same redacted
+detail — but "should" and "does" are different claims and only one is testable.
+
+**The absence of a direct browser endpoint.** Browser actions reach Chromium
+only through `ToolExecutor`, and that held because no HTTP route touches
+`BrowserService`. Nothing pinned it. "True by inspection" is how a
+`POST /api/browser/navigate` gets added next year with the best of intentions
+and no permission check. Now pinned twice: against the live route table, so a
+route added anywhere fails, and against `api/routes.py` source, so an
+innocuously-named route cannot hold a `BrowserService` either.
+
+## 25. What Step 9 added
+
+Seven tests in `tests/test_browser_exposure.py`:
+
+| Test | Kind |
+|---|---|
+| Browser actions are broadcast on the bus with origin, decision and taint intact | **real Chromium** + real orchestrator |
+| A filled value is not broadcast to live subscribers | **real Chromium**, real form |
+| A refused credential is not broadcast either | **real Chromium**, real password field |
+| A real browser fill reaches SSE without its value | **real Chromium** + real SSE generator |
+| The SSE endpoint frames an event as `event: activity` with detail intact | real route function, synthetic event |
+| No HTTP route reaches the browser directly | structural, live route table |
+| The API module does not import the browser service | structural, source |
+
+### The SSE test, and one honest limitation
+
+The first attempt drove the endpoint over `TestClient` and **hung rather than
+failed** — the client runs the app in a portal thread with its own event loop,
+the stream's `asyncio.Queue` belongs to that loop, and publishing from the test
+thread never wakes the waiting coroutine. A hang is a worse outcome than a
+missing test, so the test was rebuilt rather than deleted.
+
+The replacement consumes the real route function's generator in the test's own
+event loop. The end-to-end version drives an actual fill on an actual form and
+reads what a connected client would have received, asserting both halves against
+the same frames: that a browser action **arrives**, and that the typed value
+does not.
+
+- **VERIFIED:** event delivery and framing, and the absence of fill values and
+  refused credentials from what a subscriber receives.
+- **NOT COVERED:** the socket itself — headers, chunked transfer, client
+  disconnect. Recorded rather than claimed.
+
+## 26. Mutation battery — 13/13 caught
+
+Run against all 298 browser tests. The harness restores with
+`git checkout -- jarvis/src/` and asserts the mutation is present before
+trusting a result and absent afterwards.
+
+| Mutation | Mechanism removed | Tests failed |
+|---|---|---:|
+| `url_policy` | tool stops consulting `UrlPolicy` | 13 |
+| `origin_perm` | DENY branch removed | 8 |
+| `ask_as_allow` | ASK treated as ALLOW | 6 |
+| `confirm_bypass` | executor never asks | 12 |
+| `stale_ref` | generation no longer checked | 3 |
+| `cross_page` | page scoping removed | 1 |
+| `taint_latch` | latch becomes assignment | 3 |
+| `audit_refusal` | refusal audit dropped | 6 |
+| `redaction` | argument redaction disabled | 11 |
+| `credential` | credential refusal removed | 10 |
+| `redirect` | post-redirect recheck removed | 4 |
+| `iteration` | `max_iterations` removed | 2 |
+| `cleanup` | shutdown stops clearing pages | 2 |
+
+### Why `cross_page` is caught by only one test
+
+Investigated rather than accepted. With page scoping removed, a reference from
+page A used on page B **still fails** — element ids are unique per registration,
+so the lookup raises `UnknownElement` instead of `WrongPage`. The security
+property survives via a second, incidental mechanism; only the specificity of
+the refusal changes. Defence in depth, and worth knowing it is the *reason* the
+mutation score is thin here rather than a gap in the property itself.
+
+### A harness defect found and fixed mid-run
+
+The first battery's restore step listed files by hand and omitted
+`executor.py`, so the `confirm_bypass` mutation stayed applied and every later
+run executed with a confirmation bypass active. Those results were discarded and
+the whole battery re-run. The table above is from the clean run only.
+
+## 27. Process hygiene
+
+Chromium processes before the suite: **0**. After: **0**. No orphans.
+
+Two concurrent browser runs were observed to break
+`test_repeated_cycles_do_not_accumulate_processes`, which enumerates PIDs
+globally. That is a property of the test, not a leak — reproduced by isolating
+it — and browser suites are run one at a time.
+
+## 28. A test whose name outlived its meaning
+
+`test_nothing_in_the_subsystem_navigates_yet` was written in Step 4 as a guard
+rail before Step 5 existed. It still passes and still means something: it is
+scoped to the six Step 4 modules, `operations.py` is deliberately outside that
+set, and what it now asserts is that navigation is confined to exactly one
+module. The name claims more than the body checks. Noted, not renamed — Step 9's
+scope is coverage, and churn in a file full of security assertions is not free.
