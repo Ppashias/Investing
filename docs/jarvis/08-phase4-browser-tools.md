@@ -1,13 +1,14 @@
-# Phase 4, Steps 5–6 — the browser tool surface and its integration
+# Phase 4, Steps 5–7 — the browser tool surface, its integration, and its audit
 
-**Status:** implemented. Nine tools, registered, reachable by the agent, and
-driven end to end through the real agent loop. The control plane they sit on is
-Step 4, documented in `07-phase4-control-plane.md`.
+**Status:** implemented. Nine tools, registered, reachable by the agent, driven
+end to end through the real agent loop, and auditable after the fact. The
+control plane they sit on is Step 4, documented in `07-phase4-control-plane.md`.
 
 This document is about the tools: what they do, what they refuse, and where the
 boundary between JARVIS's own facts and a web page's claims is drawn. §10
-onwards covers the Step 6 integration — how the model reaches these tools, how
-an ASK on a navigation origin now suspends and resumes, and what is recorded.
+onwards covers the Step 6 integration — how the model reaches these tools and
+how an ASK on a navigation origin suspends and resumes. §13 covers the Step 7
+audit work: what every action records, and the three gaps that closed.
 
 ---
 
@@ -454,13 +455,34 @@ uses for `TOOL_CALL` and `PERMISSION_DECISION`. There is no second audit system.
 |---|---|
 | `navigate` (open and navigate) | `OK`, `REFUSED`, `FAILED` |
 | `read` / `interact` (the authorisation itself) | `DENIED`, `AWAITING_CONFIRMATION`, `APPROVED` |
-| `inspect`, `extract`, `close_page` | `OK` |
-| `click` | `OK`, `FAILED` |
+| `inspect`, `extract` | `OK`, `REFUSED`, `FAILED` |
+| `close_page` | `OK`, `NOOP` |
+| `click` | `OK`, `REFUSED`, `FAILED` |
 | `fill` | `OK`, `REFUSED`, `FAILED` |
 
-Detail carries the operation, the origin, the URL or element description, the
-permission reason and the applied rules — enough to answer "what did it do, to
-whom, and on whose authority".
+Detail carries the operation, the origin, the page and element ids, the URL or
+element description, the permission decision and applied rules, whether a
+confirmation was involved, and whether the turn was tainted — enough to answer
+"what did it do, to whom, on whose authority, and was it acting on something a
+web page told it".
+
+**Step 7 closed three gaps here**, each found by reconnaissance rather than by
+a failure:
+
+- **Failure paths wrote nothing.** A stale element reference, a page stranded
+  on a refused destination, an unknown page id — all returned an error and left
+  no row. An investigator saw no attempt rather than a refused one, and those
+  look identical from outside while meaning very different things. Every
+  `return ToolResult.error(...)` in the module now routes through
+  `_audit_refusal`.
+- **No row said whether the turn was tainted.** Stamped centrally in `_audit`
+  rather than at each call site, because a call site that forgot it would emit
+  a row that reads as clean.
+- **A plain ALLOW recorded no origin decision.** The executor writes a
+  `PERMISSION_DECISION` row, but that one is about `tool:browser_extract` — a
+  different resource from `browser:https://example.com`, and only the latter
+  answers "was this site permitted?". `_authorize` now returns the
+  authorisation and each action's own row carries it.
 
 ### What is redacted, and where it is not
 

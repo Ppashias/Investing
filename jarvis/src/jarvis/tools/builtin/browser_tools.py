@@ -59,6 +59,7 @@ from jarvis.browser import operations
 from jarvis.browser.capabilities import BrowserError, BrowserUnavailable
 from jarvis.browser.elements import ElementReferenceError, ElementRef
 from jarvis.browser.policy import (
+    BrowserAuthorisation,
     BrowserOperation,
     BrowserPolicy,
     CredentialRefused,
@@ -129,10 +130,39 @@ async def _audit(
         actor="agent",
         status=status,
         tool_name=f"browser:{operation}",
-        detail={"operation": operation, **(detail or {})},
+        # ``tainted`` is stamped here rather than at each call site, because a
+        # call site that forgot it would produce a row that reads as clean.
+        # "Was JARVIS acting on a poisoned page when it did this?" is the
+        # question an incident review asks first, and it must be answerable
+        # from the row itself rather than inferred by replaying the turn.
+        detail={
+            "operation": operation,
+            "tainted": ctx.tainted,
+            **(detail or {}),
+        },
         request_id=ctx.request_id,
         conversation_id=ctx.conversation_id,
     )
+
+
+async def _audit_refusal(
+    ctx: ToolContext,
+    operation: str,
+    *,
+    summary: str,
+    detail: dict[str, Any] | None = None,
+) -> None:
+    """A browser action that did not happen, recorded as such.
+
+    Every ``return ToolResult.error(...)`` in this module routes through here.
+    Before Step 7 most of them did not, so the failures that matter most to an
+    investigator — a stale element reference, a page sitting on a destination
+    the policy refuses — left no trace at all, and the audit trail showed a gap
+    where an attempt had been. An attempt that failed is evidence; silence is
+    the absence of it.
+    """
+    await _audit(ctx, operation, summary=summary, status="REFUSED",
+                 detail=detail)
 
 
 #: How to say each operation in a question the user is being asked.
@@ -146,7 +176,7 @@ async def _authorize(
     ctx: ToolContext,
     operation: BrowserOperation,
     origin: str,
-) -> None:
+) -> BrowserAuthorisation:
     """Ask the permission engine, and act on all three answers.
 
     ``allowed`` alone is not enough to branch on: an interaction is
@@ -163,6 +193,11 @@ async def _authorize(
     An approval suppresses the question, never the answer. DENY still refuses,
     and the approval is recorded so "who allowed this?" is answerable from the
     log alone.
+
+    Returns the authorisation so the operation's own audit row can carry the
+    decision that permitted it. A plain ALLOW writes no row of its own — one
+    per action is enough, and two would make the common case the noisy one —
+    but the successful action must still say on whose authority it happened.
     """
     auth = await BrowserPolicy(ctx.session).authorize(
         operation, origin=origin, user_id=ctx.user_id, tainted=ctx.tainted
@@ -221,6 +256,26 @@ async def _authorize(
             detail={"origin": origin, "reason": auth.decision.reason,
                     "rules": auth.decision.applied_rules},
         )
+
+    return auth
+
+
+def _decided(auth: BrowserAuthorisation | None) -> dict[str, Any]:
+    """The permission facts an operation's audit row should carry.
+
+    So that a successful action records the authority it acted under, not just
+    that it succeeded. Without this a plain ALLOW leaves the origin decision
+    nowhere in the ``BROWSER_ACTION`` stream — the executor writes a
+    ``PERMISSION_DECISION`` row, but that one is about ``tool:browser_extract``,
+    a different resource from ``browser:https://example.com``.
+    """
+    if auth is None:
+        return {}
+    return {
+        "decision": auth.decision.mode.value,
+        "rules": auth.decision.applied_rules,
+        "confirmed": auth.needs_confirmation,
+    }
 
 
 def _page(ctx: ToolContext, page_id: str):
@@ -382,7 +437,10 @@ async def _check_url(ctx: ToolContext, url: str):
     )
 
 
-async def _go(ctx: ToolContext, handle, decision, url: str, *, opened: bool) -> ToolResult:
+async def _go(
+    ctx: ToolContext, handle, decision, url: str, *, opened: bool,
+    auth: BrowserAuthorisation | None = None,
+) -> ToolResult:
     """Navigate to an already-checked, already-authorised destination."""
     try:
         result = await operations.navigate(
@@ -395,7 +453,8 @@ async def _go(ctx: ToolContext, handle, decision, url: str, *, opened: bool) -> 
         await _audit(
             ctx, "navigate", status="REFUSED",
             summary=f"Redirect from {url} refused",
-            detail={"url": url, "reason": exc.message},
+            detail={"url": url, "origin": decision.origin,
+                    "reason": exc.message, **_decided(auth)},
         )
         if opened:
             await _service(ctx).close_page(handle.page_id)
@@ -405,7 +464,8 @@ async def _go(ctx: ToolContext, handle, decision, url: str, *, opened: bool) -> 
         await _audit(
             ctx, "navigate", status="FAILED",
             summary=f"Could not load {url}",
-            detail={"url": url, "reason": exc.message},
+            detail={"url": url, "origin": decision.origin,
+                    "reason": exc.message, **_decided(auth)},
         )
         if opened:
             await _service(ctx).close_page(handle.page_id)
@@ -415,7 +475,8 @@ async def _go(ctx: ToolContext, handle, decision, url: str, *, opened: bool) -> 
         ctx, "navigate", status="OK",
         summary=f"Opened {result.url}",
         detail={"url": result.url, "origin": decision.origin,
-                "status": result.status, "redirected": result.redirected},
+                "page_id": handle.page_id, "status": result.status,
+                "redirected": result.redirected, **_decided(auth)},
     )
     return ToolResult.ok(
         f"{'Opened' if opened else 'Navigated to'} {result.url} — "
@@ -451,7 +512,7 @@ async def browser_open(*, ctx: ToolContext, url: str) -> ToolResult:
     if refusal is not None:
         return refusal
 
-    await _authorize(ctx, BrowserOperation.READ, decision.origin)
+    auth = await _authorize(ctx, BrowserOperation.READ, decision.origin)
 
     # Only now is a browser launched. The refused case never gets this far.
     try:
@@ -459,8 +520,17 @@ async def browser_open(*, ctx: ToolContext, url: str) -> ToolResult:
     except BrowserUnavailable:
         return ToolResult.error(_UNAVAILABLE, available=False)
     except BrowserError as exc:
+        # The page cap, or a browser that would not start. Audited because an
+        # action that was authorised and then could not run is a different
+        # event from one that was refused, and both are worth telling apart.
+        await _audit(
+            ctx, "navigate", status="FAILED",
+            summary=f"Could not open a page for {url}",
+            detail={"url": url, "origin": decision.origin,
+                    "reason": exc.message, **_decided(auth)},
+        )
         return ToolResult.error(exc.user_message)
-    return await _go(ctx, handle, decision, url, opened=True)
+    return await _go(ctx, handle, decision, url, opened=True, auth=auth)
 
 
 @tool(
@@ -491,13 +561,18 @@ async def browser_navigate(*, ctx: ToolContext, page_id: str, url: str) -> ToolR
     except BrowserUnavailable:
         return ToolResult.error(_UNAVAILABLE, available=False)
     except BrowserError as exc:
+        await _audit_refusal(
+            ctx, "navigate",
+            summary=f"Cannot navigate {page_id}: {exc.message}",
+            detail={"page_id": page_id, "url": url, "reason": exc.message},
+        )
         return ToolResult.error(exc.user_message, page_id=page_id)
 
-    await _authorize(ctx, BrowserOperation.READ, decision.origin)
+    auth = await _authorize(ctx, BrowserOperation.READ, decision.origin)
     # References die on navigation through the registry's own generation bump,
     # wired to Playwright's framenavigated event — not by anything this tool
     # remembers to do.
-    return await _go(ctx, handle, decision, url, opened=False)
+    return await _go(ctx, handle, decision, url, opened=False, auth=auth)
 
 
 # ── reading ──────────────────────────────────────────────────────────────────
@@ -562,21 +637,31 @@ async def browser_inspect(*, ctx: ToolContext, page_id: str) -> ToolResult:
     except BrowserUnavailable:
         return ToolResult.error(_UNAVAILABLE, available=False)
     except BrowserError as exc:
+        await _audit_refusal(
+            ctx, "inspect", summary=f"Cannot inspect {page_id}: {exc.message}",
+            detail={"page_id": page_id, "reason": exc.message},
+        )
         return ToolResult.error(exc.user_message, page_id=page_id)
 
-    await _authorize(ctx, BrowserOperation.READ, origin)
+    auth = await _authorize(ctx, BrowserOperation.READ, origin)
 
     service = _service(ctx)
     try:
         found = await operations.inspect(handle, service.elements)
     except BrowserError as exc:
+        await _audit(
+            ctx, "inspect", status="FAILED",
+            summary=f"Could not inspect {page_id}",
+            detail={"origin": origin, "page_id": page_id,
+                    "reason": exc.message, **_decided(auth)},
+        )
         return ToolResult.error(exc.user_message, page_id=page_id)
 
     await _audit(
         ctx, "inspect", status="OK",
         summary=f"Inspected {found.url}: {len(found.elements)} elements",
-        detail={"origin": origin, "url": found.url,
-                "elements": len(found.elements)},
+        detail={"origin": origin, "url": found.url, "page_id": page_id,
+                "elements": len(found.elements), **_decided(auth)},
     )
 
     if not found.elements:
@@ -631,19 +716,30 @@ async def browser_extract(*, ctx: ToolContext, page_id: str) -> ToolResult:
     except BrowserUnavailable:
         return ToolResult.error(_UNAVAILABLE, available=False)
     except BrowserError as exc:
+        await _audit_refusal(
+            ctx, "extract", summary=f"Cannot read {page_id}: {exc.message}",
+            detail={"page_id": page_id, "reason": exc.message},
+        )
         return ToolResult.error(exc.user_message, page_id=page_id)
 
-    await _authorize(ctx, BrowserOperation.READ, origin)
+    auth = await _authorize(ctx, BrowserOperation.READ, origin)
 
     try:
         text = await operations.extract(handle)
     except BrowserError as exc:
+        await _audit(
+            ctx, "extract", status="FAILED",
+            summary=f"Could not read {page_id}",
+            detail={"origin": origin, "page_id": page_id,
+                    "reason": exc.message, **_decided(auth)},
+        )
         return ToolResult.error(exc.user_message, page_id=page_id)
 
     await _audit(
         ctx, "extract", status="OK",
         summary=f"Read {handle.page.url} ({len(text)} chars)",
-        detail={"origin": origin, "url": handle.page.url, "chars": len(text)},
+        detail={"origin": origin, "url": handle.page.url, "page_id": page_id,
+                "chars": len(text), **_decided(auth)},
     )
 
     # ``untrusted`` is the load-bearing part. The framing above asks the model
@@ -715,12 +811,26 @@ async def browser_click(*, ctx: ToolContext, page_id: str, element_id: str) -> T
     except BrowserUnavailable:
         return ToolResult.error(_UNAVAILABLE, available=False)
     except ElementReferenceError as exc:
+        # A reference that does not resolve is the signature of a stale page, a
+        # cross-page reference, or an invented id — the three cases worth being
+        # able to see afterwards, and the ones that left no trace before Step 7.
+        await _audit_refusal(
+            ctx, "click",
+            summary=f"Refused a click on an unusable reference {element_id}",
+            detail={"page_id": page_id, "element_id": element_id,
+                    "reason": exc.message},
+        )
         return ToolResult.error(exc.user_message, page_id=page_id,
                                 element_id=element_id)
     except BrowserError as exc:
+        await _audit_refusal(
+            ctx, "click", summary=f"Cannot click on {page_id}: {exc.message}",
+            detail={"page_id": page_id, "element_id": element_id,
+                    "reason": exc.message},
+        )
         return ToolResult.error(exc.user_message, page_id=page_id)
 
-    await _authorize(ctx, BrowserOperation.INTERACT, origin)
+    auth = await _authorize(ctx, BrowserOperation.INTERACT, origin)
 
     try:
         described = await operations.click(
@@ -730,7 +840,9 @@ async def browser_click(*, ctx: ToolContext, page_id: str, element_id: str) -> T
         await _audit(
             ctx, "click", status="FAILED",
             summary=f"Could not click {entry.description} on {origin}",
-            detail={"origin": origin, "element": entry.description},
+            detail={"origin": origin, "element": entry.description,
+                    "element_id": element_id, "page_id": page_id,
+                    "reason": exc.message, **_decided(auth)},
         )
         return ToolResult.error(exc.user_message, page_id=page_id,
                                 element_id=element_id)
@@ -739,7 +851,7 @@ async def browser_click(*, ctx: ToolContext, page_id: str, element_id: str) -> T
         ctx, "click", status="OK",
         summary=f"Clicked {described} on {origin}",
         detail={"origin": origin, "element": described,
-                "element_id": element_id, "page_id": page_id},
+                "element_id": element_id, "page_id": page_id, **_decided(auth)},
     )
     return ToolResult.ok(
         f"Clicked {described}. The page may have changed — inspect or extract "
@@ -786,12 +898,25 @@ async def browser_fill(
     except BrowserUnavailable:
         return ToolResult.error(_UNAVAILABLE, available=False)
     except ElementReferenceError as exc:
+        # Never ``text`` in this row, on any path. What was going to be typed
+        # is exactly what must not survive a refusal.
+        await _audit_refusal(
+            ctx, "fill",
+            summary=f"Refused a fill on an unusable reference {element_id}",
+            detail={"page_id": page_id, "element_id": element_id,
+                    "reason": exc.message},
+        )
         return ToolResult.error(exc.user_message, page_id=page_id,
                                 element_id=element_id)
     except BrowserError as exc:
+        await _audit_refusal(
+            ctx, "fill", summary=f"Cannot type into {page_id}: {exc.message}",
+            detail={"page_id": page_id, "element_id": element_id,
+                    "reason": exc.message},
+        )
         return ToolResult.error(exc.user_message, page_id=page_id)
 
-    await _authorize(ctx, BrowserOperation.INTERACT, origin)
+    auth = await _authorize(ctx, BrowserOperation.INTERACT, origin)
 
     try:
         described = await operations.fill(
@@ -806,7 +931,8 @@ async def browser_fill(
             ctx, "fill", status="REFUSED",
             summary=f"Refused to type into a credential field on {origin}",
             detail={"origin": origin, "element": entry.description,
-                    "reason": exc.message},
+                    "element_id": element_id, "page_id": page_id,
+                    "reason": exc.message, **_decided(auth)},
         )
         return ToolResult.error(exc.user_message, page_id=page_id,
                                 element_id=element_id, credential_field=True)
@@ -814,7 +940,9 @@ async def browser_fill(
         await _audit(
             ctx, "fill", status="FAILED",
             summary=f"Could not type into {entry.description} on {origin}",
-            detail={"origin": origin, "element": entry.description},
+            detail={"origin": origin, "element": entry.description,
+                    "element_id": element_id, "page_id": page_id,
+                    "reason": exc.message, **_decided(auth)},
         )
         return ToolResult.error(exc.user_message, page_id=page_id,
                                 element_id=element_id)
@@ -826,7 +954,7 @@ async def browser_fill(
         # and how much, without the audit trail becoming the place a form's
         # contents live.
         detail={"origin": origin, "element": described, "chars": len(text),
-                "element_id": element_id, "page_id": page_id},
+                "element_id": element_id, "page_id": page_id, **_decided(auth)},
     )
     return ToolResult.ok(
         f"Typed into {described}.",
@@ -864,6 +992,14 @@ async def browser_close_page(*, ctx: ToolContext, page_id: str) -> ToolResult:
     # end it could end it in the middle of somebody else's work.
     closed = await service.close_page(page_id)
     if not closed:
+        # Not an error — closing something already gone is the outcome the
+        # caller wanted — but still an attempt against a page id that does not
+        # exist, which is worth being able to see.
+        await _audit(
+            ctx, "close_page", status="NOOP",
+            summary=f"Nothing to close: no open page {page_id}",
+            detail={"page_id": page_id},
+        )
         return ToolResult.ok(
             f"There is no open page {page_id} — nothing to close.",
             page_id=page_id, closed=False,
