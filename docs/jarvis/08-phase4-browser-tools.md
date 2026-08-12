@@ -1,14 +1,21 @@
-# Phase 4, Steps 5–7 — the browser tool surface, its integration, and its audit
+# Phase 4, Steps 5–8 — the browser tool surface, its integration, and its audit
 
 **Status:** implemented. Nine tools, registered, reachable by the agent, driven
-end to end through the real agent loop, and auditable after the fact. The
-control plane they sit on is Step 4, documented in `07-phase4-control-plane.md`.
+end to end through the real agent loop, auditable after the fact, and verified
+at the orchestrator's edges. The control plane they sit on is Step 4,
+documented in `07-phase4-control-plane.md`.
 
 This document is about the tools: what they do, what they refuse, and where the
-boundary between JARVIS's own facts and a web page's claims is drawn. §10
-onwards covers the Step 6 integration — how the model reaches these tools and
-how an ASK on a navigation origin suspends and resumes. §13 covers the Step 7
-audit work: what every action records, and the three gaps that closed.
+boundary between JARVIS's own facts and a web page's claims is drawn.
+
+- §§1–9 — the tool surface (Step 5)
+- §§10–12 — how the model reaches them, and how an ASK on a navigation origin
+  suspends and resumes (Step 6)
+- §§13–16 — what every action records, and the three audit gaps that closed
+  (Step 7)
+- §§17–23 — multi-tool batches, interrupted batches, the audit over HTTP, the
+  iteration bound, and one **confirmed limitation** in cross-turn taint
+  (Step 8)
 
 ---
 
@@ -575,3 +582,121 @@ Nothing in this document is claimed on the strength of source inspection alone
 except where it says so: the "no Playwright in tools" rule and the "no
 credential store" rule are structural assertions over source text, and are
 labelled as such.
+
+---
+
+# Step 8 — integration at the orchestrator's edges
+
+Step 6 proved the model reaches the tools with one tool per assistant turn.
+Step 8 covers the surfaces that never touched, and settles one open question.
+
+## 17. Several browser tools in one assistant response
+
+A model may emit several `ToolUseBlock`s in a single response, and
+`ExecuteStage._run_tools` loops over them. That loop is a different code path
+from two sequential turns, and it is where taint accumulates *within* a turn.
+
+Verified with real Chromium:
+
+- every tool in the batch runs and gets its own `ToolExecution` row;
+- the second tool sees the first one's taint — a batch of
+  `browser_extract` then `create_task` evaluates the task creation against a
+  tainted request, which is the whole point of recomputing taint per iteration
+  rather than once per turn;
+- taint **latches** across the batch: a clean tool in the middle
+  (`browser_status`) does not wash the turn clean again.
+
+## 18. A batch interrupted by a confirmation
+
+Three tools, the middle one needing approval. Four things must hold at once,
+and each is a distinct way this could go wrong:
+
+| | Verified |
+|---|---|
+| The first tool's real effect survives | yes |
+| Its `BROWSER_ACTION` row survives the suspension commit | yes |
+| The confirmation is persisted, not merely raised | yes — one PENDING row, bound to `browser_click` |
+| The **third tool does not run** | yes |
+
+The last is the one worth stating plainly: a batch that carried on past an
+unanswered question would make the question decorative.
+
+Resumption is by re-request, as everywhere else — the approval is
+fingerprint-bound to the click's exact arguments, so the model asking again
+with the same element is what it authorises and nothing more.
+
+## 19. The audit trail over HTTP
+
+Tested through the real API rather than by reading `ActivityService`, because a
+value redacted on the way in but reconstructed on the way out would be
+invisible to a test that only looked at one end.
+
+- `GET /api/activity` exposes `BROWSER_ACTION` rows with operation, origin,
+  status, permission decision, applied rules and taint intact — everything §13
+  promised is reconstructable from the API alone.
+- A filled value never appears in any response from `/api/activity`,
+  `/api/confirmations` or `/api/system/status`.
+- Neither does a **refused credential** value — the harder case, because the
+  confirmation record is created before the DOM check that refuses the fill.
+- Redaction does not cost the record: the `REFUSED` fill row is still there and
+  still says a credential field was refused.
+
+## 20. The iteration bound
+
+A model that only ever calls `browser_status` — a tool that needs no page,
+never fails and never asks — still stops. Nothing but the bound itself can end
+that loop, which is what makes it a real test of the bound.
+
+`max_iterations_reached` is reported as a warning on a **completed** turn
+rather than raised as a failure, and a run that hits the bound leaves the page
+count within `max_pages` and shuts down cleanly.
+
+## 21. Cross-turn taint — a confirmed limitation, deliberately not fixed
+
+**The investigation.** Turn one extracts a page whose text is a
+prompt-injection payload; turn one is tainted and the engine escalates
+correctly. Turn two continues the same conversation — the payload is still in
+the transcript the model reasons from, because turns with tool calls replay
+losslessly by design — and **turn two starts clean.**
+
+Demonstrated through the real orchestrator with real Chromium, not inferred:
+`test_a_later_turn_does_not_inherit_the_previous_turns_taint`. A control test
+in the same file shows taint *does* carry within a turn, so the finding is
+specifically about the turn boundary and not about taint being broken.
+
+**The cause is architectural.** `ContextBundle.tainted` is set in exactly two
+places — memory retrieval and knowledge retrieval. Conversation history is not
+a taint source, and `PipelineContext.tool_taint` is per-request by
+construction.
+
+**The exposure, stated precisely.** `browser_click` and `browser_fill` are
+unaffected: they declare `requires_confirmation`, so they ask on every turn
+whatever taint says. What is not escalated on turn two is every *other*
+non-read capability — on this build, Obsidian writes and task creation.
+
+**Why it is not fixed here.** The same hole exists for a poisoned Obsidian note
+read in a previous turn, so this is not a browser defect and a browser-specific
+patch would be the wrong shape. The natural fix — making conversation history
+contribute taint — changes global taint semantics and would affect memory,
+knowledge and Obsidian turns alike. Step 8's instruction was explicitly not to
+do that. **Recorded here as a known limitation for the Step 11 adversarial
+audit.**
+
+The test asserts the *current* behaviour and says so in its docstring: if it
+ever starts failing, the architecture changed and this section is stale.
+
+## 22. Step 8 mutation results
+
+| Mutation | Tests failed |
+|---|---|
+| Intra-batch taint accumulation removed | 2 |
+| Batch continues past a suspension | 3 |
+| Suspension not persisted (rollback instead of commit) | 4 |
+| Argument redaction disabled (API leak) | 2 |
+| Iteration bound removed | 2 |
+
+## 23. Platform status after Step 8
+
+Unchanged from §16: **Linux VERIFIED**, Windows and macOS **UNVERIFIED**
+(nothing executed there). The API tests add no platform dependency — they run
+over the in-process test client.
