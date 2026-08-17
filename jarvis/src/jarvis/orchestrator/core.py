@@ -103,6 +103,7 @@ class Orchestrator:
         memory_duplicate_threshold: float = 0.87,
         computer: Any = None,
         browser: Any = None,
+        background: Any = None,
     ) -> None:
         self.registry = registry
         self.router = router
@@ -120,6 +121,7 @@ class Orchestrator:
         self.memory_duplicate_threshold = memory_duplicate_threshold
         self.computer = computer
         self.browser = browser
+        self.background = background
 
     # ── wiring ───────────────────────────────────────────────────────────────
 
@@ -152,6 +154,24 @@ class Orchestrator:
             emergency_stop=getattr(self.computer, "emergency_stop", None),
         )
 
+    def _make_supervisor(self, session: AsyncSession) -> Any:
+        """A supervisor per request, like the executor.
+
+        Per request rather than process-wide because it hands out identities
+        derived from *this* turn's actor, and one that outlived the turn could
+        hand a later one a ceiling computed from an earlier caller. The jobs it
+        starts outlive the request; the authority to start them does not.
+        """
+        from jarvis.agents.supervisor import AgentSupervisor
+
+        return AgentSupervisor(
+            executor_factory=self._make_executor,
+            registry=self.registry,
+            router=self.router,
+            activity=self._activity(session),
+            emergency_stop=getattr(self.computer, "emergency_stop", None),
+        )
+
     def _build_pipeline(self, activity: ActivityService) -> Pipeline:
         return Pipeline(
             stages=[
@@ -168,6 +188,8 @@ class Orchestrator:
                     embeddings=self.embeddings,
                     computer=self.computer,
                     browser=self.browser,
+                    background=self.background,
+                    supervisor_factory=self._make_supervisor,
                 ),
                 ValidateResultStage(),
                 PersistStage(),

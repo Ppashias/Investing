@@ -258,6 +258,12 @@ def _ctx(core, session, user, *, tainted: bool = False) -> ToolContext:
             "project_id": None,
             "computer": core.computer,
             "browser": core.browser,
+            # Phase D. Present because the loop supplies them and
+            # test_a_tool_sees_the_same_extras_from_the_loop_and_from_a_test
+            # exists to notice when this drifts — which is exactly what it did
+            # when these two were added.
+            "background": core.background,
+            "agents": orchestrator._make_supervisor(session),
             "activity": orchestrator._activity(session),
         },
     )

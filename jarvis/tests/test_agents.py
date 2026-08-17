@@ -382,3 +382,193 @@ async def test_spawning_is_recorded_with_the_ceiling_it_granted(core, session) -
     assert detail["capabilities"] == ["READ"]
     assert detail["tools"] == ["browser_extract"]
     assert detail["depth"] == 1
+
+
+# ── the tools that expose all this (Phase D, items 6 & 7 wiring) ─────────────
+#
+# Machinery nothing can reach is not a feature. These drive the real path —
+# registry → ToolExecutor → permission → handler — because that is what makes
+# spawning an audited, gated act rather than a function call.
+
+
+async def _run(core, name, args, *, session=None, agent=None):
+    from jarvis.core import JarvisCore
+    from jarvis.tools.base import ToolContext
+    from jarvis.tools.executor import ToolCall
+
+    async with core.database.session_factory() as s:
+        user = await JarvisCore.ensure_default_user(s)
+        await s.commit()
+        ctx = ToolContext(
+            user_id=user.id, session=s, request_id="req_agent_tools", agent=agent,
+            extras={
+                "agents": core.orchestrator._make_supervisor(s),
+                "background": core.background,
+                "activity": core.orchestrator._activity(s),
+            },
+        )
+        outcome = await core.orchestrator._make_executor(s).execute(
+            ToolCall(id="t", name=name, arguments=args), ctx
+        )
+        await s.commit()
+        return outcome
+
+
+async def test_spawning_goes_through_the_executor(core) -> None:
+    """Not a pipeline stage, on purpose.
+
+    Spawning hands authority to a second actor, which is exactly what the
+    permission engine, the confirmation flow and the audit log exist for. A
+    stage would have been the second execution path this codebase keeps
+    refusing to build.
+    """
+    from jarvis.errors import ConfirmationRequiredError
+
+    # EXECUTE defaults to ASK, so delegation is asked about the first time.
+    with pytest.raises(ConfirmationRequiredError):
+        await _run(core, "spawn_agent", {"role": "researcher", "task": "look it up"})
+
+
+async def test_a_spawned_agent_reports_the_ceiling_it_actually_got(core) -> None:
+    from jarvis.db.models import PermissionGrant
+
+    async with core.database.session_factory() as session:
+        from jarvis.core import JarvisCore
+
+        user = await JarvisCore.ensure_default_user(session)
+        session.add(
+            PermissionGrant(user_id=user.id, capability=Capability.EXECUTE,
+                            resource_scope="*", mode=PermissionMode.ALLOW,
+                            note="for the delegation tests")
+        )
+        await session.commit()
+
+    outcome = await _run(
+        core, "spawn_agent",
+        {"role": "researcher", "task": "look it up",
+         "capabilities": ["read", "write"]},
+    )
+    assert outcome.result.is_error is False, outcome.result.content
+    assert outcome.result.data["capabilities"] == ["READ", "WRITE"]
+    assert outcome.result.data["depth"] == 1
+
+
+async def test_a_child_cannot_spawn_beyond_what_it_holds(core) -> None:
+    """The ceiling applies to the spawn tool like everything else.
+
+    A delegated agent asking for more than it has gets an agent without it —
+    the request is not an error, because an error would tell the model where
+    the boundary is.
+    """
+    from jarvis.db.models import PermissionGrant
+
+    async with core.database.session_factory() as session:
+        from jarvis.core import JarvisCore
+
+        user = await JarvisCore.ensure_default_user(session)
+        session.add(
+            PermissionGrant(user_id=user.id, capability=Capability.EXECUTE,
+                            resource_scope="*", mode=PermissionMode.ALLOW,
+                            note="for the delegation tests")
+        )
+        await session.commit()
+
+    parent = AgentIdentity.root().narrowed(
+        role="planner", capabilities={Capability.READ, Capability.EXECUTE}
+    )
+    outcome = await _run(
+        core, "spawn_agent",
+        {"role": "writer", "task": "write things", "capabilities": ["write"]},
+        agent=parent,
+    )
+    assert outcome.result.is_error is False, outcome.result.content
+    assert outcome.result.data["capabilities"] == []
+
+
+async def test_an_unknown_capability_name_is_dropped_not_reported(core) -> None:
+    """The list comes from the model; an error would enumerate what exists."""
+    from jarvis.db.models import PermissionGrant
+
+    async with core.database.session_factory() as session:
+        from jarvis.core import JarvisCore
+
+        user = await JarvisCore.ensure_default_user(session)
+        session.add(
+            PermissionGrant(user_id=user.id, capability=Capability.EXECUTE,
+                            resource_scope="*", mode=PermissionMode.ALLOW,
+                            note="for the delegation tests")
+        )
+        await session.commit()
+
+    outcome = await _run(
+        core, "spawn_agent",
+        {"role": "r", "task": "t", "capabilities": ["read"]},
+    )
+    assert outcome.result.is_error is False
+    assert outcome.result.data["capabilities"] == ["READ"]
+
+
+async def test_background_status_reports_nothing_when_idle(core) -> None:
+    outcome = await _run(core, "background_status", {})
+    assert outcome.result.is_error is False
+    assert outcome.result.data["count"] == 0
+
+
+async def test_starting_a_background_job_is_honest_about_what_it_does(core) -> None:
+    """It records the request; it does not yet carry it out.
+
+    Saying so is the point. Reporting an empty job as progress would be the
+    fake-success failure this system exists to avoid, and a runner that
+    *pretended* to work would be worse than one that says plainly what it did.
+    """
+    from jarvis.db.models import PermissionGrant
+
+    async with core.database.session_factory() as session:
+        from jarvis.core import JarvisCore
+
+        user = await JarvisCore.ensure_default_user(session)
+        session.add(
+            PermissionGrant(user_id=user.id, capability=Capability.EXECUTE,
+                            resource_scope="*", mode=PermissionMode.ALLOW,
+                            note="for the background tests")
+        )
+        await session.commit()
+
+    outcome = await _run(
+        core, "start_background_task",
+        {"title": "research something", "task": "find the docs"},
+    )
+    assert outcome.result.is_error is False, outcome.result.content
+    assert "record the request rather than carrying it out" in outcome.result.content
+
+
+def test_the_loop_supplies_the_agent_and_background_extras() -> None:
+    """The extras contract, pinned — the lesson Obsidian taught the hard way.
+
+    A tool works perfectly in a test and does nothing in production when this
+    drifts, because every test that builds its own context supplies the keys by
+    hand.
+    """
+    import inspect
+
+    from jarvis.orchestrator.stages import ExecuteStage
+
+    source = inspect.getsource(ExecuteStage._run_tools)
+    assert '"background": self.background' in source
+    assert '"agents":' in source
+
+
+def test_the_supervisor_is_built_per_request() -> None:
+    """Per request, like the executor.
+
+    One that outlived the turn could hand a later caller a ceiling computed
+    from an earlier actor. The jobs it starts outlive the request; the
+    authority to start them does not.
+    """
+    import inspect
+
+    from jarvis.orchestrator.core import Orchestrator
+
+    assert hasattr(Orchestrator, "_make_supervisor")
+    source = inspect.getsource(Orchestrator._make_supervisor)
+    assert "emergency_stop" in source

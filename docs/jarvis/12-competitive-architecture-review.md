@@ -412,8 +412,8 @@ Everything below is **NOT STARTED**. Nothing in this document has been built.
 | 3 | Emergency stop at the executor | **VERIFIED** — 7 tests |
 | 4 | Audit channel + impact classification | NOT STARTED |
 | 5 | Context rules | NOT STARTED |
-| 6 | AgentSupervisor | **IMPLEMENTED** — 21 tests. Authority model verified; not yet wired to a live model loop or exposed as a tool |
-| 7 | Background execution | **IMPLEMENTED** — 18 tests. Runner verified; not yet wired to the orchestrator or exposed as a tool |
+| 6 | AgentSupervisor | **VERIFIED** — 29 tests. Wired to the orchestrator and exposed as `spawn_agent`; the delegated *model loop* is not built |
+| 7 | Background execution | **IMPLEMENTED** — 18 tests + 3 tools. Lifecycle verified; a job currently *records* its request rather than carrying it out |
 | 8 | OS sandbox | NOT STARTED |
 | 9 | Windows UIA backend | **IMPLEMENTED — WINDOWS UNVERIFIED.** 14 tests off-Windows; no input call has ever executed |
 | 10 | Skill system | NOT STARTED |

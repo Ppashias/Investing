@@ -9,11 +9,12 @@ independent JARVIS inside a test.
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from jarvis.agents.background import BackgroundRunner
 from jarvis.activity.service import ActivityBus
 from jarvis.browser import BrowserService, BrowserSettings
 from jarvis.config import Settings, get_settings
@@ -49,6 +50,15 @@ class JarvisCore:
     #: Phase 4. Constructed at build time but deliberately not started: no
     #: Chromium process exists until something actually asks to browse.
     browser: BrowserService
+    #: Phase D. Process-wide, because a job registry with per-request scope
+    #: tracks nothing — the same reason the emergency stop lives on the
+    #: computer service rather than being rebuilt each turn.
+    #:
+    #: Defaulted so a hand-assembled core (every test that builds one) keeps
+    #: working: an empty runner is a correct runner, and requiring it would
+    #: have made "does this build have background work?" a constructor detail
+    #: rather than a capability question.
+    background: BackgroundRunner = field(default_factory=BackgroundRunner)
 
     # ── lifecycle ────────────────────────────────────────────────────────────
 
@@ -103,6 +113,15 @@ class JarvisCore:
             activity_bus=bus,
         )
 
+        # Process-wide, like the emergency stop and for the same reason: a
+        # registry with per-request scope tracks nothing. The runner reaches
+        # the same stop object, so "stop everything" includes work nobody is
+        # watching.
+        background = BackgroundRunner(
+            activity_factory=None,
+            emergency_stop=computer.emergency_stop,
+        )
+
         budget = ContextBudget(
             max_memories=settings.memory_max_injected,
             max_memory_chars=settings.memory_max_chars,
@@ -127,6 +146,7 @@ class JarvisCore:
             memory_duplicate_threshold=settings.memory_duplicate_threshold,
             computer=computer,
             browser=browser,
+            background=background,
         )
 
         return cls(
@@ -140,6 +160,7 @@ class JarvisCore:
             embeddings=embeddings,
             computer=computer,
             browser=browser,
+            background=background,
         )
 
     async def startup(self, *, create_schema: bool = False) -> None:

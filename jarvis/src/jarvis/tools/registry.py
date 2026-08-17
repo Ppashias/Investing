@@ -162,6 +162,7 @@ def build_default_registry() -> ToolRegistry:
     ``BrowserPolicy``/``UrlPolicy`` for the three that leave.
     """
     from jarvis.tools.builtin import (
+        agent_tools,
         browser_tools,
         computer_tools,
         memory_tools,
@@ -172,6 +173,7 @@ def build_default_registry() -> ToolRegistry:
 
     registry = ToolRegistry()
     registry.register_all(system_tools.TOOLS)
+    registry.register_all(agent_tools.TOOLS)
     registry.register_all(task_tools.TOOLS)
     registry.register_all(memory_tools.TOOLS)
     registry.register_all(obsidian_tools.OBSIDIAN_TOOLS)

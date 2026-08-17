@@ -272,6 +272,8 @@ class ExecuteStage(Stage):
         embeddings: Any = None,
         computer: Any = None,
         browser: Any = None,
+        background: Any = None,
+        supervisor_factory: Any = None,
     ) -> None:
         self.registry = registry
         self._make_executor = executor_factory
@@ -281,6 +283,8 @@ class ExecuteStage(Stage):
         self.embeddings = embeddings
         self.computer = computer
         self.browser = browser
+        self.background = background
+        self._make_supervisor = supervisor_factory
 
     async def run(self, ctx: PipelineContext) -> None:
         assert ctx.routing is not None
@@ -392,6 +396,12 @@ class ExecuteStage(Stage):
                     "project_id": ctx.project_id,
                     "computer": self.computer,
                     "browser": self.browser,
+                    "background": self.background,
+                    "agents": (
+                        self._make_supervisor(ctx.session)
+                        if self._make_supervisor is not None
+                        else None
+                    ),
                     # The *same* ActivityService the executor writes its
                     # TOOL_CALL and PERMISSION_DECISION rows through, bound to
                     # this request's session. A tool that keeps its own
