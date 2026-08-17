@@ -461,6 +461,24 @@ async def stream_activity(core: CoreDep, _: AuthDep) -> StreamingResponse:
 system_router = APIRouter(prefix="/system", tags=["system"])
 
 
+@system_router.get("/telemetry")
+async def system_telemetry(
+    session: SessionDep,
+    _: AuthDep,
+    window_hours: int = 168,
+) -> dict[str, Any]:
+    """What is failing most often, from local rows only.
+
+    Nothing here is transmitted anywhere — see :mod:`jarvis.telemetry.service`
+    for why that is a design decision rather than an omission.
+    """
+    from jarvis.telemetry.service import TelemetryService
+
+    window = max(1, min(int(window_hours), 24 * 90))
+    report = await TelemetryService(session).report(window_hours=window)
+    return report.describe()
+
+
 @system_router.get("/status")
 async def system_status(core: CoreDep, _: AuthDep) -> dict[str, Any]:
     return core.status()
