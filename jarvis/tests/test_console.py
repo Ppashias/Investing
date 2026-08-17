@@ -479,3 +479,100 @@ def test_trust_is_carried_by_position_as_well_as_colour(
     assert '"trust-tag"' in code
     css = client.get("/assets/app.css").text
     assert "border-left-color:var(--red)" in css
+
+
+# ── approvals already waiting when the console connects ──────────────────────
+
+
+def test_pending_approvals_are_loaded_on_connect(client: TestClient) -> None:
+    """The stream carries what happens *next*.
+
+    A console that only ever learned about approvals from `approval.required`
+    showed "Nothing is waiting on you." to anyone who opened the page after
+    JARVIS had asked, or who simply reloaded it — which is the one situation
+    where a person is most likely to be looking for what they owe an answer
+    to. Found by running the thing and reading the panel, not by a test, so
+    this is the test.
+    """
+    code = _console_code(client)
+    assert "refreshApprovals" in code
+
+    # It must be wired to the connect handler, not merely defined. Pinned by
+    # reading the handler body, because a defined-but-never-called function is
+    # exactly the shape this bug had.
+    handler = re.search(
+        r'addEventListener\("jarvis:authenticated"[^{]*\{(.*?)\}\s*\)',
+        code, flags=re.S,
+    )
+    assert handler is not None, "the authenticated handler moved"
+    assert "refreshApprovals" in handler.group(1)
+
+    # And it reads the same endpoint the Confirmations view does, so the two
+    # cannot disagree about what is outstanding.
+    assert '"/confirmations"' in code
+
+
+async def test_the_console_reads_fields_the_confirmation_payload_actually_has(
+    client: TestClient, core
+) -> None:
+    """The panel is only as good as the shape it assumes.
+
+    Seeding from `/confirmations` means the console now reads `id`, `title`,
+    `tool`, `impact` and `reason` off that payload. If any of them were
+    renamed, the panel would still render — with blank rows — and nothing else
+    in the suite would notice. Driven through the real endpoint rather than
+    asserted against `to_dict`, since the endpoint is what the browser sees.
+    """
+    from jarvis.confirmations.service import ConfirmationRequest, ConfirmationService
+    from jarvis.core import JarvisCore
+    from jarvis.db.models import RiskLevel
+
+    # The core's database, not the standalone `session` fixture: those are two
+    # different in-memory SQLites, and a confirmation written to the other one
+    # would leave this test asserting against an empty list forever.
+    async with core.database.session_factory() as session:
+        # …and the subject the API resolves, for the same reason: a
+        # confirmation raised for somebody else would not appear either.
+        owner = await JarvisCore.ensure_default_user(session)
+        await ConfirmationService(session).request(
+            ConfirmationRequest(
+                user_id=owner.id,
+                title="Delete the draft",
+                body="This cannot be undone.",
+                tool_name="browser_click",
+                arguments={"page_id": "pg_1", "selector": "#delete"},
+                risk_level=RiskLevel.HIGH,
+                reversible=False,
+                impact="destructive",
+                reason="the action cannot be taken back",
+            )
+        )
+        await session.commit()
+
+    rows = client.get("/api/confirmations").json()["confirmations"]
+    assert len(rows) == 1
+    row = rows[0]
+    for field in ("id", "title", "tool", "impact", "reason"):
+        assert field in row, f"the console reads {field} and it is absent"
+    assert row["impact"] == "destructive"
+    assert row["title"] == "Delete the draft"
+
+
+def test_seeding_approvals_does_not_carry_the_pending_arguments(
+    client: TestClient
+) -> None:
+    """`/confirmations` returns `body` and `arguments`; the panel takes
+    neither.
+
+    A standing panel is not the dialog. The arguments *are* the thing being
+    approved, and a value the user typed into a page — which is exactly what
+    `redact_arguments` exists to keep out of the database — has no business
+    sitting on screen until somebody gets round to deciding. The decision
+    surface shows them; the waiting list shows what is waiting.
+    """
+    code = _console_code(client)
+    seeder = re.search(r"async function refreshApprovals\(\)(.*?)\n  \}",
+                       code, flags=re.S)
+    assert seeder is not None, "refreshApprovals moved"
+    for forbidden in ("row.arguments", "row.body", ".arguments", ".body"):
+        assert forbidden not in seeder.group(1), forbidden

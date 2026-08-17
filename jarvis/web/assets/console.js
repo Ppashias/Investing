@@ -43,6 +43,9 @@
     jobs: [],
     mode: "SAFE",
     stopped: false,
+    /* Non-null only while refreshApprovals() has a request in flight; see the
+       comment there for why the arrivals need recording. */
+    approvalsInFlight: null,
   };
 
   function node(tag, className, text) {
@@ -115,6 +118,53 @@
     document.dispatchEvent(
       new CustomEvent("jarvis:reading", { detail: reading })
     );
+  }
+
+  /* What is already waiting when the console connects.
+     The stream carries what happens next, so without this a page opened after
+     JARVIS asked — or simply reloaded — showed "Nothing is waiting on you."
+     while confirmations sat pending. Read from the same endpoint the
+     Confirmations view uses, so the two cannot disagree about what is
+     outstanding. */
+  async function refreshApprovals() {
+    if (!window.jarvisApi) return;
+    /* An approval that arrives on the stream while this request is in flight
+       must survive the reconcile below. Dropping it would reintroduce exactly
+       the bug this function exists to fix, and intermittently, which is
+       worse. */
+    const arrived = new Set();
+    state.approvalsInFlight = arrived;
+    let data;
+    try {
+      data = await window.jarvisApi("/confirmations");
+    } catch (_) {
+      state.approvalsInFlight = null;
+      return;
+    }
+    state.approvalsInFlight = null;
+
+    /* The endpoint is the authority on what is still pending: an approval
+       resolved while this tab was closed should disappear rather than linger
+       as something the user is asked to act on twice. */
+    for (const key of Array.from(state.approvals.keys())) {
+      if (!arrived.has(key)) state.approvals.delete(key);
+    }
+    for (const row of data.confirmations || []) {
+      state.approvals.set(row.id, {
+        summary: row.title,
+        tool: row.tool,
+        /* Only the fields the panel draws. `body` and `arguments` stay behind:
+           the pending action's arguments are the thing being approved, and
+           they belong in the dialog where the decision is made, not in a
+           standing panel that gets screenshotted. */
+        detail: {
+          impact: row.impact,
+          reason: row.reason,
+          confirmation_id: row.id,
+        },
+      });
+    }
+    paintApprovals();
   }
 
   function paintApprovals() {
@@ -461,8 +511,9 @@
     addEvent(payload);
 
     if (payload.event === "approval.required") {
-      state.approvals.set(payload.detail.confirmation_id || payload.request_id,
-                          payload);
+      const key = payload.detail.confirmation_id || payload.request_id;
+      state.approvals.set(key, payload);
+      if (state.approvalsInFlight) state.approvalsInFlight.add(key);
       paintApprovals();
     } else if (payload.event === "approval.granted"
                || payload.event === "approval.rejected") {
@@ -486,6 +537,7 @@
   });
 
   document.addEventListener("jarvis:authenticated", () => {
+    refreshApprovals();
     refreshJobs();
     refreshSecurity();
     refreshMemory();
