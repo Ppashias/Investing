@@ -420,9 +420,9 @@ Everything below is **NOT STARTED**. Nothing in this document has been built.
 | 11 | Model routing | **IMPLEMENTED** — 5 tests. Constraints honoured; no caller passes them yet |
 | 12 | Goals | **VERIFIED** — 10 tests + 2 tools, no migration (built on the task tree) |
 | 13 | Telemetry | **VERIFIED** — 13 tests, local-only by design, `/api/system/telemetry` |
-| 14 | Voice | NOT STARTED |
+| 14 | Voice | **IMPLEMENTED — BROWSER UNVERIFIED.** 5 tests off-device; no microphone has ever opened here |
 
-Eleven of fourteen. Nothing above is called VERIFIED unless a test exercises the
+Twelve of fourteen, plus the front-end restyle. Nothing above is called VERIFIED unless a test exercises the
 behaviour it claims — item 6 is IMPLEMENTED rather than VERIFIED because its
 authority model is tested and its integration with a real agent loop is not,
 and item 9 cannot be VERIFIED anywhere but Windows.

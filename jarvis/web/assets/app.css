@@ -481,3 +481,41 @@ input:focus,select:focus{outline:none; border-color:var(--accent-soft)}
     background:linear-gradient(90deg,var(--accent-soft),var(--accent))}
   *{transition:none !important}
 }
+
+/* ── voice ────────────────────────────────────────────────────────────── */
+/* Two switches, not one. Speech *output* is local synthesis and costs nothing;
+   speech *input* sends audio to the browser vendor for transcription, which
+   contradicts this system's whole proposition. Separating them means turning
+   on the harmless half does not quietly enable the other. */
+
+.voice-bar{
+  display:flex; align-items:center; gap:8px;
+  padding:7px 11px 0; border-top:1px solid var(--border);
+}
+.voice-bar .ghost.on{
+  color:var(--accent); border-color:var(--accent-soft);
+  background:rgba(79,216,255,.09);
+  box-shadow:0 0 14px rgba(79,216,255,.18);
+}
+/* A live microphone must be unmistakable. It is the one control on this page
+   whose state, if misread, means somebody is recorded without meaning to be —
+   so it pulses, and it is the single exception to "motion is decorative". */
+#micBtn.on{
+  color:var(--gold); border-color:var(--gold);
+  background:rgba(255,181,69,.10);
+  animation:live 1.4s ease-in-out infinite;
+}
+@keyframes live{
+  0%,100%{box-shadow:0 0 0 0 var(--gold-glow)}
+  50%{box-shadow:0 0 0 5px rgba(255,181,69,0)}
+}
+.voice-status{
+  color:var(--dim); font-size:10px; letter-spacing:.06em;
+  white-space:nowrap; overflow:hidden; text-overflow:ellipsis;
+}
+/* Under reduced motion the pulse becomes a solid ring rather than nothing.
+   Removing the signal entirely would be the one case where honouring the
+   preference costs the user something that matters. */
+@media (prefers-reduced-motion: reduce){
+  #micBtn.on{animation:none; box-shadow:0 0 0 3px var(--gold-glow)}
+}

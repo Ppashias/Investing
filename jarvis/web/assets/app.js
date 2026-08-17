@@ -188,6 +188,21 @@
     if (empty) empty.remove();
   }
 
+  /* Announce an assistant turn for anything that wants to react to it —
+     today, the voice module reading it aloud.
+
+     A CustomEvent rather than a direct call keeps the two files independent:
+     this one does not know whether voice.js loaded, and voice.js failing
+     cannot stop a reply from rendering. It also means the reply is on screen
+     before anything is spoken, which is the right order — the screen is the
+     record and the speech is a convenience. */
+  function announce(role, text) {
+    if (role !== "assistant" || !text) return;
+    document.dispatchEvent(
+      new CustomEvent("jarvis:reply", { detail: { text: text } })
+    );
+  }
+
   function addMessage(role, text, options) {
     const opts = options || {};
     clearEmptyState();
@@ -209,6 +224,9 @@
 
     el.messages.appendChild(wrap);
     el.messages.scrollTop = el.messages.scrollHeight;
+    // After the DOM insertion, so the reply is on screen before anything is
+    // spoken. The screen is the record; the speech is a convenience.
+    announce(role, text);
     return wrap;
   }
 
@@ -333,7 +351,7 @@
     try {
       await api("/confirmations/" + encodeURIComponent(id) + "/decide", {
         method: "POST",
-        body: { approved: approved },
+        body: { approved: approved, channel: "ui" },
       });
       if (approved) {
         addMessage("assistant", "Approved. Ask me to continue and I will carry it out.", {

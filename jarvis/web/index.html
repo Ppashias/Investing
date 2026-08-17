@@ -58,6 +58,11 @@
       <span id="thinkingLabel">working…</span>
     </div>
 
+    <div id="voiceBar" class="voice-bar">
+      <button type="button" id="micBtn" class="ghost small" aria-pressed="false">Dictate</button>
+      <button type="button" id="speakBtn" class="ghost small" aria-pressed="false">Voice off</button>
+      <span id="voiceStatus" class="voice-status" aria-live="polite"></span>
+    </div>
     <form id="composer" class="composer">
       <textarea id="input" rows="1" placeholder="Message JARVIS…  (Enter to send, Shift+Enter for newline)" autocomplete="off"></textarea>
       <button type="submit" id="sendBtn" class="primary">Send</button>
@@ -284,5 +289,6 @@
 
 <script src="/assets/hud.js" defer></script>
 <script src="/assets/app.js"></script>
+<script src="/assets/voice.js" defer></script>
 </body>
 </html>

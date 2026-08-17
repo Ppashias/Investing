@@ -444,3 +444,86 @@ def test_the_stylesheet_still_beats_the_hidden_attribute(client: TestClient) -> 
     """
     css = client.get("/assets/app.css").text
     assert "[hidden]{display:none !important}" in css
+
+
+# ── voice (Phase D, item 14) ─────────────────────────────────────────────────
+#
+# The browser already has SpeechRecognition and speechSynthesis: no model
+# download, no native wheels, no CDN, and a microphone permission the user
+# grants per-origin and revokes in one click. For a UI that is already a
+# browser page that beats a Python pipeline.
+#
+# The cost is real and is not buried: Chrome sends audio to Google to
+# transcribe it, which contradicts this system's local-first proposition. So
+# input is off until clicked, and the tests below pin the properties that make
+# that safe rather than merely stated.
+
+
+def test_voice_input_and_output_are_separate_switches(client: TestClient) -> None:
+    """Output is local synthesis and costs nothing. Input ships audio to the
+    browser vendor. One switch would mean turning on the harmless half quietly
+    enabled the other."""
+    page = client.get("/").text
+    assert 'id="micBtn"' in page
+    assert 'id="speakBtn"' in page
+
+
+def test_nothing_starts_a_microphone_without_a_click(client: TestClient) -> None:
+    """No autostart, and no wake word listening in the background.
+
+    A page that opens a microphone on load is a page nobody should run, and a
+    permanently-open wake-word channel is the same thing with better manners.
+    """
+    import re
+
+    source = client.get("/assets/voice.js").text
+    code = re.sub(r"/\*.*?\*/", "", source, flags=re.S)
+    code = re.sub(r"^\s*//.*$", "", code, flags=re.M)
+
+    # `start` exists but is only ever reached from a click handler.
+    assert "addEventListener(\"click\"" in code
+    assert "start()" in code
+    # …and is never called at module scope. The IIFE's last statements must not
+    # begin listening.
+    assert not re.search(r"^\s*start\(\);", code, flags=re.M)
+
+
+def test_dictation_fills_the_box_and_does_not_send(client: TestClient) -> None:
+    """Speech recognition mishears, and a message that sends itself gives
+    nobody the chance to notice. One keystroke is the whole difference between
+    a draft and an action."""
+    import re
+
+    code = re.sub(r"/\*.*?\*/", "", client.get("/assets/voice.js").text, flags=re.S)
+    # It must never submit the composer or click send on the user's behalf.
+    for forbidden in (".submit()", "sendBtn.click", "requestSubmit"):
+        assert forbidden not in code, f"voice.js calls {forbidden}"
+
+
+def test_a_spoken_approval_is_the_servers_decision_not_the_clients(
+    client: TestClient
+) -> None:
+    """The destructive-never-by-voice rule lives in ConfirmationService, so it
+    holds whatever the client claims.
+
+    Built in the previous commit precisely so that adding voice could not be
+    the change that introduced the hole. This asserts the rule is server-side
+    and that the UI reports its channel honestly.
+    """
+    from jarvis.confirmations.service import ConfirmationService
+
+    assert "voice" in ConfirmationService.UNSAFE_FOR_DESTRUCTIVE
+    assert 'channel: "ui"' in client.get("/assets/app.js").text
+
+
+def test_the_reply_reaches_voice_through_an_event_not_a_call(
+    client: TestClient
+) -> None:
+    """Keeps the two files independent: app.js does not know whether voice.js
+    loaded, and voice.js failing cannot stop a reply from rendering."""
+    app_js = client.get("/assets/app.js").text
+    assert 'CustomEvent("jarvis:reply"' in app_js
+    assert 'jarvis:reply' in client.get("/assets/voice.js").text
+    # …and the announcement happens after the DOM insertion, so the screen has
+    # the reply before anything is spoken.
+    assert "return wrap;\n    announce" not in app_js
