@@ -342,3 +342,47 @@ def test_the_status_browser_block_carries_no_page_titles(client: TestClient) -> 
     body = client.get("/api/security").json()
     for page in body["browser"].get("pages", []):
         assert set(page) == {"page_id", "url"}
+
+
+# ── the status reactor ───────────────────────────────────────────────────────
+
+
+def test_the_reactor_carries_state_rather_than_spinning(client: TestClient) -> None:
+    """The largest borrowing from the films, and it earns the space only if it
+    means something.
+
+    A decorative ring at that size would be a lie the size of the panel — the
+    most prominent thing on screen saying nothing. Each ring is a reading, and
+    the console publishes them.
+    """
+    reactor = _console_code_for(client, "reactor.js")
+    for reading in ("approvals", "jobs", "denials", "mode"):
+        assert reading in reactor, f"the reactor ignores {reading}"
+
+    console = _console_code(client)
+    assert 'CustomEvent("jarvis:reading"' in console
+
+
+def test_every_ring_has_its_number_printed_beside_it(client: TestClient) -> None:
+    """Colour is reinforcement, never the only signal — the rule the rest of
+    this interface follows. Someone who cannot separate gold from cyan still
+    has to be able to read "3 awaiting you"."""
+    page = client.get("/").text
+    for element in ("readApprovals", "readJobs", "readDenials"):
+        assert 'id="%s"' % element in page
+
+
+def test_the_reactor_cannot_reach_the_api(client: TestClient) -> None:
+    """It draws; the console computes. Kept apart so a rendering bug cannot
+    take the panel's data with it."""
+    code = _console_code_for(client, "reactor.js")
+    for forbidden in ("fetch(", "jarvisApi", "localStorage", "token"):
+        assert forbidden not in code, f"reactor.js contains {forbidden}"
+
+
+def test_the_reactor_stops_for_reduced_motion(client: TestClient) -> None:
+    code = _console_code_for(client, "reactor.js")
+    assert "prefers-reduced-motion" in code
+    # …and draws a still frame rather than nothing: the readings must survive
+    # the animation being switched off.
+    assert "draw(0)" in code

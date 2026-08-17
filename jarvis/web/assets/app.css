@@ -609,3 +609,56 @@ input:focus,select:focus{outline:none; border-color:var(--accent-soft)}
 }
 .con-summary{color:var(--text); flex:1; min-width:140px; word-break:break-word}
 .con-status{font-size:9px; letter-spacing:.11em}
+
+/* ── status reactor ───────────────────────────────────────────────────── */
+/* The largest borrowing from the films, and it earns the space by carrying
+   state: gold arc means a human is needed, cyan segments count running jobs,
+   red means something was refused. Every ring has its number printed beside
+   it, so the colour is reinforcement rather than the only signal. */
+
+.reactor-bay{
+  display:flex; align-items:center; gap:16px;
+  padding:14px 6px 18px; margin-bottom:6px;
+  border-bottom:1px solid var(--border);
+}
+#statusReactor{
+  width:180px; height:180px; flex:none; display:block;
+  filter:drop-shadow(0 0 22px rgba(79,216,255,.20));
+}
+.reactor-legend{
+  list-style:none; display:flex; flex-direction:column; gap:9px;
+  font-size:10px; letter-spacing:.11em; text-transform:uppercase;
+  color:var(--muted);
+}
+.reactor-legend li{display:flex; align-items:center; gap:8px}
+.reactor-legend b{
+  color:var(--bright); font-size:15px; letter-spacing:0; margin-left:auto;
+}
+.key{width:9px; height:9px; flex:none; border:1px solid currentColor}
+.key-gold{color:var(--gold); background:rgba(255,181,69,.35)}
+.key-cyan{color:var(--accent); background:rgba(79,216,255,.35)}
+.key-red{color:var(--red); background:rgba(255,93,93,.35)}
+
+/* Angular corners on the outer frames. A HUD is cut, not rounded, and the
+   two-corner bevel reads as machined where a border-radius reads as a card.
+   Only the outermost frames get it — doing it to every list row would be
+   costume rather than construction. */
+.panel, .rail{
+  clip-path:polygon(
+    14px 0, 100% 0, 100% calc(100% - 14px),
+    calc(100% - 14px) 100%, 0 100%, 0 14px
+  );
+}
+
+/* Chrome type: thin geometric sans with wide tracking, as the films use.
+   Data stays monospace — a column of numbers that does not align is a worse
+   sin than a slightly off-reference label. */
+.brand, .mode-banner, .tab, .badge, h3, h4,
+.reactor-legend, .con-kind, .impact, .job-state{
+  font-family:ui-sans-serif, "Segoe UI", system-ui, -apple-system, sans-serif;
+}
+
+@media (max-width:900px){
+  .reactor-bay{flex-direction:column; align-items:flex-start}
+  #statusReactor{width:140px; height:140px}
+}

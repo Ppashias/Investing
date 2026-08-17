@@ -84,6 +84,18 @@
     </div>
 
     <div id="consoleRoot" class="tabpanel" data-panel="console">
+      <div class="reactor-bay">
+        <canvas id="statusReactor" width="180" height="180" aria-hidden="true"></canvas>
+        <ul class="reactor-legend">
+          <li><span class="key key-gold"></span>Awaiting you
+              <b id="readApprovals">0</b></li>
+          <li><span class="key key-cyan"></span>Jobs running
+              <b id="readJobs">0</b></li>
+          <li><span class="key key-red"></span>Refused 24h
+              <b id="readDenials">0</b></li>
+        </ul>
+      </div>
+
       <div class="rail-head">
         <h4>Awaiting you</h4><span id="approvalCount" class="dim">0</span>
       </div>
@@ -323,5 +335,6 @@
 <script src="/assets/app.js"></script>
 <script src="/assets/voice.js" defer></script>
 <script src="/assets/console.js" defer></script>
+<script src="/assets/reactor.js" defer></script>
 </body>
 </html>

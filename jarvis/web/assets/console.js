@@ -94,12 +94,36 @@
 
   /* ── approvals ──────────────────────────────────────────────────────────── */
 
+  /* One place computes the numbers and one place draws them. A rendering bug
+     in the reactor must not be able to take the panel's data with it, and a
+     ring that disagrees with the number printed beside it would be worse than
+     no ring at all. */
+  function publishReading() {
+    const set = (id, value) => {
+      const el = $(id);
+      if (el) el.textContent = String(value);
+    };
+    const reading = {
+      approvals: state.approvals.size,
+      jobs: state.jobs.filter((j) => j.state === "RUNNING").length,
+      denials: state.denials || 0,
+      mode: state.stopped ? "LOCKDOWN" : state.mode,
+    };
+    set("readApprovals", reading.approvals);
+    set("readJobs", reading.jobs);
+    set("readDenials", reading.denials);
+    document.dispatchEvent(
+      new CustomEvent("jarvis:reading", { detail: reading })
+    );
+  }
+
   function paintApprovals() {
     const list = $("approvalList");
     const count = $("approvalCount");
     if (!list) return;
     clear(list);
     if (count) count.textContent = String(state.approvals.size);
+    publishReading();
 
     if (!state.approvals.size) {
       list.appendChild(node("li", "empty-state", "Nothing is waiting on you."));
@@ -141,6 +165,7 @@
   }
 
   function paintJobs() {
+    publishReading();
     const list = $("jobList");
     if (!list) return;
     clear(list);
@@ -191,7 +216,9 @@
     }
 
     state.stopped = !!(data.emergency_stop && data.emergency_stop.engaged);
+    state.denials = data.denied_last_24h || 0;
     paintMode(state.mode, state.stopped);
+    publishReading();
 
     if (data.browser) paintBrowser(data.browser);
 
