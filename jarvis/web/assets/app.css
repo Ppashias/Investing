@@ -1,0 +1,749 @@
+/* JARVIS — command center.
+
+   The Phase 1 stylesheet carried over Portfolio Nebula's palette so the two
+   dashboards felt like one system. That was the right call then and is the
+   wrong one now: this is not a portfolio widget, it is the interface to
+   something that can drive a browser, read a vault and operate a machine, and
+   it should read as an instrument rather than as a web page.
+
+   ## The reference, and where it is deliberately disobeyed
+
+   The look is the Iron Man HUD: arc-reactor cyan on near-black, repulsor gold
+   for anything that needs a human, hairline rules, corner brackets, uppercase
+   letterspaced labels, a faint scan.
+
+   Three places the fiction is ignored on purpose, because a real instrument has
+   to be usable:
+
+   * **Body text is not glowing cyan.** Film HUDs are unreadable by design —
+     they are set dressing shot for two seconds. Long-form text here is a calm
+     near-white; the cyan is reserved for chrome, state and emphasis.
+   * **Motion is decorative only.** Nothing that conveys information moves. A
+     reader must never have to wait for an animation to know what happened.
+   * **Nothing depends on colour alone.** Every state that matters carries a
+     word as well as a hue, because the whole point of a confirmation is that
+     it is understood.
+
+   ## Contrast
+
+   Body text sits at roughly 12:1 on the page background, and the dimmest
+   supporting text at about 5:1 — above WCAG AA for its size. The glow is a
+   shadow, never the thing being read; removing every shadow in this file would
+   change how it feels and not whether it can be read.
+
+   Structure, class names and behaviour are unchanged. This file is the look. */
+
+:root{
+  color-scheme: dark;
+
+  /* ── ground ──────────────────────────────────────────────────────────── */
+  --bg:#03060c;            /* near-black, blue cast rather than neutral */
+  --bg-lift:#060b14;
+  --card:#070d18;
+  --sunk:#02050a;
+  --border:#12293d;        /* hairline, reads as drawn rather than as a box */
+  --border-hot:#1d4c6e;
+
+  /* ── ink ─────────────────────────────────────────────────────────────── */
+  --text:#c6dbe8;
+  --bright:#eaf6ff;
+  --muted:#7fa8c4;
+  --dim:#4d7590;
+
+  /* ── the reactor ─────────────────────────────────────────────────────── */
+  --accent:#4fd8ff;
+  --accent-soft:#2a9fc4;
+  --accent-glow:rgba(79,216,255,.45);
+  --blue:#4fd8ff;
+
+  /* ── repulsor gold: anything awaiting a human ────────────────────────── */
+  --gold:#ffb545;
+  --gold-glow:rgba(255,181,69,.35);
+
+  --green:#5ce6a8;
+  --red:#ff5d5d;
+  --red-glow:rgba(255,93,93,.4);
+
+  --radius:2px;            /* HUDs are drawn, not rounded */
+  --hair:1px solid var(--border);
+}
+
+*{margin:0;padding:0;box-sizing:border-box;-webkit-tap-highlight-color:transparent}
+
+/* The `hidden` attribute must beat every layout rule below. The UA stylesheet
+   defines [hidden]{display:none} at author-stylesheet-losing priority, so any
+   author rule setting `display` — .modal{display:flex}, .auth-gate{display:flex}
+   — silently wins and the element stays on screen with its `hidden` attribute
+   set. Every overlay in this page is display:flex, so without this line the
+   confirmation dialog and the auth gate are permanently visible. */
+[hidden]{display:none !important}
+
+html,body{height:100%}
+
+body{
+  background:var(--bg); color:var(--text);
+  font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;
+  font-size:13px; line-height:1.6;
+  display:flex; flex-direction:column;
+  padding-top:env(safe-area-inset-top);
+  overscroll-behavior:none;
+  position:relative;
+}
+
+/* The field the whole interface sits on. Two layers: a slow radial bloom from
+   the reactor, and a grid that is almost subliminal — visible enough to read
+   as an instrument surface, faint enough never to compete with text. */
+body::before{
+  content:""; position:fixed; inset:0; z-index:0; pointer-events:none;
+  background:
+    radial-gradient(1100px 620px at 50% -10%, rgba(79,216,255,.10), transparent 62%),
+    radial-gradient(760px 520px at 100% 100%, rgba(42,159,196,.06), transparent 60%),
+    linear-gradient(rgba(79,216,255,.028) 1px, transparent 1px) 0 0/100% 32px,
+    linear-gradient(90deg, rgba(79,216,255,.028) 1px, transparent 1px) 0 0/32px 100%;
+}
+
+/* The scan. Purely decorative, and the first thing to go under
+   prefers-reduced-motion — a moving band across the whole page is exactly the
+   sort of thing that makes some people ill. */
+body::after{
+  content:""; position:fixed; inset:0; z-index:1; pointer-events:none;
+  background:linear-gradient(rgba(79,216,255,.055), transparent 42%);
+  height:180px; animation:scan 7.5s linear infinite; opacity:.5;
+}
+@keyframes scan{
+  0%{transform:translateY(-190px)} 100%{transform:translateY(100vh)}
+}
+
+body > *{position:relative; z-index:2}
+
+/* ── type ─────────────────────────────────────────────────────────────── */
+
+h1,h2,h3,h4{
+  font-weight:600; letter-spacing:.11em; text-transform:uppercase;
+  color:var(--bright);
+}
+h3{font-size:11px}
+h4{font-size:10px; color:var(--muted)}
+code{
+  font-family:inherit; background:var(--sunk); color:var(--accent);
+  padding:1px 5px; border:var(--hair); border-radius:var(--radius);
+}
+.dim{color:var(--dim)}
+.small{font-size:11px}
+.warn{color:var(--gold)}
+.danger{color:var(--red)}
+
+/* ── the bracket, used everywhere a panel needs an edge ───────────────── */
+
+.panel, .rail, .memory-card, .auth-card, .modal-card, .obsidian-block,
+.comp-block, .system-info{
+  position:relative;
+  background:
+    linear-gradient(var(--card),var(--card)) padding-box,
+    linear-gradient(160deg, rgba(79,216,255,.30), rgba(79,216,255,.04) 45%,
+                    rgba(79,216,255,.22)) border-box;
+  border:1px solid transparent;
+  border-radius:var(--radius);
+}
+/* Corner ticks. Two pseudo-elements give the top-left and bottom-right of a
+   reticle; the other two corners are deliberately left open, because a fully
+   closed frame reads as a card and the point is that it reads as a cut-out. */
+.panel::before, .rail::before, .modal-card::before, .auth-card::before{
+  content:""; position:absolute; top:-1px; left:-1px; width:14px; height:14px;
+  border-top:2px solid var(--accent); border-left:2px solid var(--accent);
+  opacity:.85; pointer-events:none;
+}
+.panel::after, .rail::after, .modal-card::after, .auth-card::after{
+  content:""; position:absolute; bottom:-1px; right:-1px; width:14px; height:14px;
+  border-bottom:2px solid var(--accent); border-right:2px solid var(--accent);
+  opacity:.85; pointer-events:none;
+}
+
+/* ── topbar ───────────────────────────────────────────────────────────── */
+
+.topbar{
+  display:flex; align-items:center; gap:14px;
+  padding:10px 16px;
+  border-bottom:1px solid var(--border);
+  background:linear-gradient(180deg, rgba(6,11,20,.96), rgba(3,6,12,.82));
+  backdrop-filter:blur(8px);
+}
+.brand{
+  display:flex; align-items:center; gap:10px;
+  font-size:15px; font-weight:700; letter-spacing:.34em;
+  color:var(--bright); text-transform:uppercase;
+  text-shadow:0 0 14px var(--accent-glow);
+}
+/* The reactor. A canvas draws the live one; this is the ring it sits in, so
+   the mark is still present and still centred when the canvas is absent —
+   scripts fail, and a brand that vanishes with them looks broken. */
+#reactor{width:22px; height:22px; display:block; filter:drop-shadow(0 0 6px var(--accent-glow))}
+
+.topbar-status{margin-left:auto; display:flex; align-items:center; gap:8px}
+.badge{
+  font-size:10px; letter-spacing:.14em; text-transform:uppercase;
+  padding:3px 9px; border:1px solid var(--border);
+  border-radius:var(--radius); color:var(--muted);
+  background:rgba(79,216,255,.05);
+}
+.badge.ok{
+  color:var(--accent); border-color:var(--accent-soft);
+  box-shadow:0 0 12px rgba(79,216,255,.18) inset;
+}
+.badge.bad{color:var(--red); border-color:rgba(255,93,93,.5)}
+
+/* ── layout ───────────────────────────────────────────────────────────── */
+
+.layout{
+  flex:1; display:grid; grid-template-columns:minmax(0,1fr) 380px;
+  gap:12px; padding:12px; min-height:0;
+}
+.panel{display:flex; flex-direction:column; min-height:0; overflow:hidden}
+.panel-head{
+  display:flex; align-items:center; gap:10px;
+  padding:9px 13px; border-bottom:1px solid var(--border);
+  background:rgba(79,216,255,.035);
+}
+/* The rail head sits *inside* a padded tab panel, so giving it the panel-head
+   treatment made it read as a second nested card floating in the pane. It is a
+   caption for the list below it; a rule underneath is all it needs. */
+.rail-head{
+  display:flex; align-items:center; gap:10px;
+  padding:0 0 8px; margin-bottom:9px;
+  border-bottom:1px solid var(--border);
+}
+.panel-head h3 small{
+  margin-left:8px; color:var(--dim); text-transform:none; letter-spacing:0;
+  font-weight:400;
+}
+
+/* ── conversation ─────────────────────────────────────────────────────── */
+
+.messages{flex:1; overflow-y:auto; padding:16px; display:flex;
+          flex-direction:column; gap:16px; scrollbar-width:thin}
+.msg{display:flex; flex-direction:column; gap:5px; max-width:none}
+.msg-meta{display:flex; align-items:baseline; gap:9px}
+.msg-role{
+  font-size:10px; letter-spacing:.2em; text-transform:uppercase;
+  color:var(--accent); font-weight:700;
+}
+.msg[data-role="user"] .msg-role{color:var(--gold)}
+.msg-body{
+  white-space:pre-wrap; word-break:break-word;
+  border-left:2px solid var(--border); padding-left:12px;
+  color:var(--text);
+}
+.msg[data-role="assistant"] .msg-body{border-left-color:var(--accent-soft)}
+.msg[data-role="user"] .msg-body{border-left-color:rgba(255,181,69,.45)}
+
+.thinking{
+  display:flex; align-items:center; gap:10px;
+  padding:9px 16px; border-top:1px solid var(--border);
+  color:var(--accent); font-size:11px;
+  letter-spacing:.14em; text-transform:uppercase;
+}
+/* Three ticks that fill in sequence. Decorative — the label beside it already
+   says what is happening, so nothing is lost when motion is off. */
+.thinking .band{
+  width:52px; height:2px; background:var(--sunk); overflow:hidden; position:relative;
+}
+.thinking .band::after{
+  content:""; position:absolute; inset:0; width:34%;
+  background:linear-gradient(90deg,transparent,var(--accent),transparent);
+  animation:sweep 1.15s ease-in-out infinite;
+}
+@keyframes sweep{0%{transform:translateX(-120%)}100%{transform:translateX(320%)}}
+
+.composer{
+  display:flex; gap:9px; padding:11px; border-top:1px solid var(--border);
+  background:rgba(2,5,10,.6);
+}
+.composer textarea{
+  flex:1; resize:none; background:var(--sunk); color:var(--bright);
+  border:1px solid var(--border); border-radius:var(--radius);
+  padding:9px 11px; font:inherit; max-height:190px;
+}
+.composer textarea:focus{
+  outline:none; border-color:var(--accent-soft);
+  box-shadow:0 0 0 1px var(--accent-soft), 0 0 18px rgba(79,216,255,.12);
+}
+.composer textarea::placeholder{color:var(--dim)}
+
+/* ── controls ─────────────────────────────────────────────────────────── */
+
+button{
+  font:inherit; cursor:pointer; border-radius:var(--radius);
+  letter-spacing:.1em; text-transform:uppercase; font-size:11px;
+  padding:7px 15px; transition:box-shadow .16s, border-color .16s, color .16s;
+}
+.primary{
+  background:linear-gradient(180deg, rgba(79,216,255,.16), rgba(79,216,255,.05));
+  border:1px solid var(--accent-soft); color:var(--bright);
+  box-shadow:0 0 14px rgba(79,216,255,.12) inset;
+}
+.primary:hover{box-shadow:0 0 18px rgba(79,216,255,.30), 0 0 14px rgba(79,216,255,.2) inset}
+.ghost{background:transparent; border:1px solid var(--border); color:var(--muted)}
+.ghost:hover{border-color:var(--accent-soft); color:var(--accent)}
+.danger{
+  background:rgba(255,93,93,.08); border:1px solid rgba(255,93,93,.45);
+  color:var(--red);
+}
+.danger:hover{box-shadow:0 0 16px var(--red-glow)}
+button:disabled{opacity:.4; cursor:not-allowed; box-shadow:none}
+
+input,select,textarea{
+  background:var(--sunk); color:var(--text); font:inherit;
+  border:1px solid var(--border); border-radius:var(--radius); padding:6px 9px;
+}
+input:focus,select:focus{outline:none; border-color:var(--accent-soft)}
+
+/* ── rail ─────────────────────────────────────────────────────────────── */
+
+.rail{display:flex; flex-direction:column; min-height:0; overflow:hidden}
+/* Wrap rather than scroll. A horizontally scrolling tab strip hides the tabs
+   past the edge with no affordance saying so — the first render of this
+   stylesheet clipped "TASKS" and nothing indicated there was more. Two short
+   rows cost 22px and lose nothing. */
+.tabs{display:flex; flex-wrap:wrap; gap:2px; padding:7px 7px 0;
+      border-bottom:1px solid var(--border)}
+.tab{
+  background:transparent; border:1px solid transparent; border-bottom:none;
+  color:var(--dim); padding:5px 9px; white-space:nowrap; font-size:10px;
+  letter-spacing:.08em;
+}
+.tab.sel{
+  color:var(--accent); border-color:var(--border);
+  background:rgba(79,216,255,.07);
+  box-shadow:0 -2px 0 var(--accent) inset;
+}
+.tabpanel{flex:1; overflow-y:auto; padding:11px; min-height:0; scrollbar-width:thin}
+.rail-filters{display:flex; gap:7px; margin-bottom:9px}
+.rail-filters input,.rail-filters select{flex:1; min-width:0}
+.rail-notice{
+  color:var(--gold); font-size:11px; padding:7px 9px; margin-bottom:9px;
+  border:1px solid rgba(255,181,69,.3); background:rgba(255,181,69,.05);
+  border-radius:var(--radius);
+}
+.empty-state{color:var(--dim); text-align:center; padding:26px 12px; font-size:11px}
+
+/* ── activity ─────────────────────────────────────────────────────────── */
+
+.activity-list,.memory-list,.source-list,.scope-list,.audit-list,
+.mem-history-list{list-style:none; display:flex; flex-direction:column; gap:5px}
+.activity-list li{
+  display:grid; grid-template-columns:52px 1fr; gap:9px;
+  padding:5px 7px; border-left:2px solid var(--border);
+  background:rgba(79,216,255,.02); font-size:11px;
+}
+.act-time{color:var(--dim)}
+.act-kind{
+  font-size:9px; letter-spacing:.13em; text-transform:uppercase;
+  color:var(--accent-soft);
+}
+.act-summary{color:var(--text); word-break:break-word}
+
+/* Outcome colours. Each is paired with the word itself in the markup, so the
+   hue is reinforcement rather than the only signal. */
+.ao-OK,.ao-SUCCEEDED,.ao-RESOLVED{color:var(--green)}
+.ao-FAILED,.ao-ERROR,.ao-TIMED_OUT{color:var(--red)}
+.ao-AWAITING_CONFIRMATION{color:var(--gold)}
+
+/* ── memory / knowledge / tasks ───────────────────────────────────────── */
+
+.memory-card{padding:9px 11px; display:flex; flex-direction:column; gap:6px}
+.mem-top,.audit-top,.src-row,.task-row,.tool-row{
+  display:flex; align-items:center; gap:8px; flex-wrap:wrap;
+}
+.mem-kind,.audit-kind,.tool-cap,.doc-status,.task-status,.src-state{
+  font-size:9px; letter-spacing:.13em; text-transform:uppercase;
+  padding:2px 7px; border:1px solid var(--border); border-radius:var(--radius);
+  color:var(--muted);
+}
+.mem-text,.audit-meta,.doc-title,.task-title,.tool-name{color:var(--text)}
+.mem-meta,.doc-meta,.task-meta,.tool-desc,.audit-meta{color:var(--dim); font-size:11px}
+.mem-flag{color:var(--gold); font-size:10px; letter-spacing:.1em}
+.mem-actions,.obs-actions,.modal-actions{display:flex; gap:7px; flex-wrap:wrap}
+.mem-facts{display:flex; gap:11px; flex-wrap:wrap; font-size:11px; color:var(--dim)}
+.mem-edit textarea{width:100%}
+
+.st-PROPOSED{color:var(--gold)}
+.st-COMPLETED{color:var(--green)}
+.st-TODO,.st-WAITING{color:var(--muted)}
+.st-CANCELLED,.st-SUPERSEDED{color:var(--dim); text-decoration:line-through}
+.ds-INDEXED{color:var(--green)}
+.ds-REGISTERED{color:var(--muted)}
+
+.risk{font-size:9px; letter-spacing:.13em; text-transform:uppercase}
+.risk-MEDIUM{color:var(--gold)}
+.risk-HIGH{color:var(--red)}
+.cap-WRITE{color:var(--accent)}
+.cap-SENSITIVE_ACTION{color:var(--red)}
+.tool-off{opacity:.42}
+
+.toolchips{display:flex; gap:5px; flex-wrap:wrap; margin-top:5px}
+.toolchip{
+  font-size:9px; letter-spacing:.1em; text-transform:uppercase;
+  padding:2px 7px; border:1px solid var(--accent-soft);
+  color:var(--accent); background:rgba(79,216,255,.07);
+  border-radius:var(--radius);
+}
+
+/* ── overlays ─────────────────────────────────────────────────────────── */
+
+.auth-gate,.modal{
+  position:fixed; inset:0; z-index:60; display:flex;
+  align-items:center; justify-content:center; padding:20px;
+  background:rgba(2,5,10,.86); backdrop-filter:blur(6px);
+}
+.auth-card,.modal-card{
+  width:min(560px,100%); padding:22px; display:flex; flex-direction:column; gap:13px;
+  box-shadow:0 0 60px rgba(79,216,255,.10);
+}
+.auth-card h2,.modal-head h3{color:var(--accent); text-shadow:0 0 12px var(--accent-glow)}
+.auth-error{color:var(--red)}
+.modal-body{max-height:52vh; overflow-y:auto; display:flex;
+            flex-direction:column; gap:11px}
+.modal-args{
+  background:var(--sunk); border:var(--hair); border-radius:var(--radius);
+  padding:11px; white-space:pre-wrap; word-break:break-word;
+  color:var(--muted); font-size:11px; max-height:220px; overflow:auto;
+}
+/* A confirmation is the one place in this interface where the styling has a
+   job beyond looking right: it must not be possible to click through it on
+   reflex. Gold, because gold means "a human is required" everywhere else here
+   too, and the actions sit apart from the body so the pointer has to travel. */
+.modal-card{border-color:transparent;
+  background:
+    linear-gradient(var(--card),var(--card)) padding-box,
+    linear-gradient(160deg, var(--gold), rgba(255,181,69,.15)) border-box;
+}
+.modal-card::before,.modal-card::after{border-color:var(--gold)}
+.modal-actions{margin-top:6px; padding-top:13px; border-top:1px solid var(--border)}
+
+/* ── emergency stop ───────────────────────────────────────────────────── */
+
+.stop-bar{
+  display:flex; align-items:center; gap:11px; padding:9px 13px;
+  border:1px solid rgba(255,93,93,.4); background:rgba(255,93,93,.06);
+  border-radius:var(--radius); margin-bottom:11px;
+}
+.stop-button{
+  background:rgba(255,93,93,.12); border:1px solid var(--red); color:var(--red);
+  font-weight:700; letter-spacing:.16em;
+}
+.stop-button:hover{box-shadow:0 0 22px var(--red-glow)}
+.stop-state{color:var(--red); font-size:11px; letter-spacing:.1em}
+
+/* ── misc blocks ──────────────────────────────────────────────────────── */
+
+.obsidian-block,.comp-block,.system-info{padding:11px; margin-bottom:11px;
+                                          display:flex; flex-direction:column; gap:9px}
+.obs-form{display:flex; flex-direction:column; gap:7px}
+.obs-label{font-size:10px; letter-spacing:.13em; text-transform:uppercase; color:var(--muted)}
+.obs-input{width:100%}
+.obs-caps{display:flex; gap:6px; flex-wrap:wrap}
+.obs-cap{font-size:9px; letter-spacing:.1em; text-transform:uppercase;
+         padding:2px 7px; border:1px solid var(--border); color:var(--muted)}
+.obs-check{display:flex; align-items:center; gap:7px; color:var(--muted); font-size:11px}
+.obs-conflicts{border-top:1px solid var(--border); padding-top:9px}
+.obs-conflict-list{list-style:none; display:flex; flex-direction:column; gap:4px}
+.obs-conflict-path{color:var(--gold); font-size:11px; word-break:break-all}
+.comp-hint{color:var(--dim); font-size:11px}
+.screen-preview{
+  width:100%; border:1px solid var(--border); border-radius:var(--radius);
+  display:block; background:var(--sunk);
+}
+.src-name,.scope-name{color:var(--text)}
+.src-detail{color:var(--dim); font-size:11px; word-break:break-all}
+.audit-outcome{font-size:9px; letter-spacing:.13em; text-transform:uppercase}
+.mem-history{border-top:1px solid var(--border); margin-top:6px; padding-top:6px}
+
+/* ── scrollbars ───────────────────────────────────────────────────────── */
+
+::-webkit-scrollbar{width:9px; height:9px}
+::-webkit-scrollbar-track{background:var(--sunk)}
+::-webkit-scrollbar-thumb{background:#123146; border:2px solid var(--sunk)}
+::-webkit-scrollbar-thumb:hover{background:var(--accent-soft)}
+
+/* ── narrow ───────────────────────────────────────────────────────────── */
+
+@media (max-width:900px){
+  .layout{grid-template-columns:1fr; grid-template-rows:minmax(0,1fr) minmax(0,46vh)}
+  .brand{font-size:13px; letter-spacing:.24em}
+}
+
+/* ── reduced motion ───────────────────────────────────────────────────── */
+/* Everything that moves here is decorative, so all of it can go. A full-page
+   scanning band is precisely what this media query exists for. */
+@media (prefers-reduced-motion: reduce){
+  body::after{animation:none; opacity:.2}
+  .thinking .band::after{animation:none; width:100%;
+    background:linear-gradient(90deg,var(--accent-soft),var(--accent))}
+  *{transition:none !important}
+}
+
+/* ── voice ────────────────────────────────────────────────────────────── */
+/* Two switches, not one. Speech *output* is local synthesis and costs nothing;
+   speech *input* sends audio to the browser vendor for transcription, which
+   contradicts this system's whole proposition. Separating them means turning
+   on the harmless half does not quietly enable the other. */
+
+.voice-bar{
+  display:flex; align-items:center; gap:8px;
+  padding:7px 11px 0; border-top:1px solid var(--border);
+}
+.voice-bar .ghost.on{
+  color:var(--accent); border-color:var(--accent-soft);
+  background:rgba(79,216,255,.09);
+  box-shadow:0 0 14px rgba(79,216,255,.18);
+}
+/* A live microphone must be unmistakable. It is the one control on this page
+   whose state, if misread, means somebody is recorded without meaning to be —
+   so it pulses, and it is the single exception to "motion is decorative". */
+#micBtn.on{
+  color:var(--gold); border-color:var(--gold);
+  background:rgba(255,181,69,.10);
+  animation:live 1.4s ease-in-out infinite;
+}
+@keyframes live{
+  0%,100%{box-shadow:0 0 0 0 var(--gold-glow)}
+  50%{box-shadow:0 0 0 5px rgba(255,181,69,0)}
+}
+.voice-status{
+  color:var(--dim); font-size:10px; letter-spacing:.06em;
+  white-space:nowrap; overflow:hidden; text-overflow:ellipsis;
+}
+/* Under reduced motion the pulse becomes a solid ring rather than nothing.
+   Removing the signal entirely would be the one case where honouring the
+   preference costs the user something that matters. */
+@media (prefers-reduced-motion: reduce){
+  #micBtn.on{animation:none; box-shadow:0 0 0 3px var(--gold-glow)}
+}
+
+/* ── command centre ───────────────────────────────────────────────────── */
+
+/* The mode banner. Asked to be impossible to miss, and it carries the word as
+   well as the colour — someone who cannot separate amber from red must still
+   be able to tell AUTONOMOUS from LOCKDOWN, which is the most consequential
+   distinction on the page. */
+.mode-banner{
+  padding:6px 16px; font-size:11px; font-weight:700;
+  letter-spacing:.26em; text-transform:uppercase; text-align:center;
+  border-bottom:1px solid var(--border);
+}
+.mode-banner[data-mode="SAFE"]{
+  color:var(--accent); background:rgba(79,216,255,.07);
+  border-bottom-color:var(--accent-soft);
+}
+.mode-banner[data-mode="ASSISTED"]{
+  color:var(--accent); background:rgba(79,216,255,.12);
+  border-bottom-color:var(--accent);
+}
+.mode-banner[data-mode="AUTONOMOUS"]{
+  color:var(--gold); background:rgba(255,181,69,.12);
+  border-bottom-color:var(--gold); text-shadow:0 0 12px var(--gold-glow);
+}
+.mode-banner[data-mode="LOCKDOWN"]{
+  color:var(--red); background:rgba(255,93,93,.14);
+  border-bottom-color:var(--red); text-shadow:0 0 14px var(--red-glow);
+}
+
+.approval-list,.job-list,.sec-list,.console-feed{
+  list-style:none; display:flex; flex-direction:column; gap:5px;
+  margin-bottom:13px;
+}
+.approval-row{
+  padding:9px 11px; border:1px solid var(--gold);
+  background:rgba(255,181,69,.06); border-radius:var(--radius);
+  display:flex; flex-direction:column; gap:5px;
+}
+.approval-title{color:var(--bright)}
+.approval-facts{display:flex; gap:9px; flex-wrap:wrap; align-items:center}
+/* Impact leads, because "can I take this back" is the question a person is
+   actually answering and burying it under the tool name inverts that. */
+.impact{
+  font-size:9px; letter-spacing:.14em; text-transform:uppercase;
+  padding:2px 7px; border:1px solid var(--border); border-radius:var(--radius);
+}
+.impact-read{color:var(--muted)}
+.impact-write{color:var(--accent); border-color:var(--accent-soft)}
+.impact-external{color:var(--gold); border-color:rgba(255,181,69,.5)}
+.impact-destructive{
+  color:var(--red); border-color:var(--red); background:rgba(255,93,93,.08);
+}
+
+.job-row,.sec-row{
+  display:flex; align-items:center; gap:9px; flex-wrap:wrap;
+  padding:6px 9px; border-left:2px solid var(--border);
+  background:rgba(79,216,255,.02); font-size:11px;
+}
+.job-state{
+  font-size:9px; letter-spacing:.13em; text-transform:uppercase;
+  color:var(--muted);
+}
+.st-RUNNING{color:var(--accent)}
+.st-PAUSED{color:var(--gold)}
+.st-AWAITING_CONFIRMATION{color:var(--gold)}
+.st-FAILED{color:var(--red)}
+.job-title{color:var(--text); flex:1; min-width:120px}
+.job-actions{display:flex; gap:5px}
+.sec-label{color:var(--muted); flex:1}
+.sec-value{color:var(--bright)}
+
+.approval-list .empty-state,.job-list .empty-state,
+.sec-list .empty-state,.console-feed .empty-state{
+  padding:8px 4px; text-align:left;
+}
+.console-feed li{
+  display:flex; gap:9px; align-items:baseline; flex-wrap:wrap;
+  padding:4px 7px; border-left:2px solid var(--border); font-size:11px;
+}
+/* Loud events — an approval needed, a refusal, a stop — get a gold edge. A
+   scrolling feed is worst at exactly the things that most need noticing. */
+.console-feed li.loud{
+  border-left-color:var(--gold); background:rgba(255,181,69,.05);
+}
+.con-kind{
+  font-size:9px; letter-spacing:.11em; color:var(--accent-soft);
+  text-transform:uppercase; white-space:nowrap;
+}
+.con-summary{color:var(--text); flex:1; min-width:140px; word-break:break-word}
+.con-status{font-size:9px; letter-spacing:.11em}
+
+/* ── status reactor ───────────────────────────────────────────────────── */
+/* The largest borrowing from the films, and it earns the space by carrying
+   state: gold arc means a human is needed, cyan segments count running jobs,
+   red means something was refused. Every ring has its number printed beside
+   it, so the colour is reinforcement rather than the only signal. */
+
+.reactor-bay{
+  display:flex; align-items:center; gap:16px;
+  padding:14px 6px 18px; margin-bottom:6px;
+  border-bottom:1px solid var(--border);
+}
+#statusReactor{
+  width:180px; height:180px; flex:none; display:block;
+  filter:drop-shadow(0 0 22px rgba(79,216,255,.20));
+}
+.reactor-legend{
+  list-style:none; display:flex; flex-direction:column; gap:9px;
+  font-size:10px; letter-spacing:.11em; text-transform:uppercase;
+  color:var(--muted);
+}
+.reactor-legend li{display:flex; align-items:center; gap:8px}
+.reactor-legend b{
+  color:var(--bright); font-size:15px; letter-spacing:0; margin-left:auto;
+}
+.key{width:9px; height:9px; flex:none; border:1px solid currentColor}
+.key-gold{color:var(--gold); background:rgba(255,181,69,.35)}
+.key-cyan{color:var(--accent); background:rgba(79,216,255,.35)}
+.key-red{color:var(--red); background:rgba(255,93,93,.35)}
+
+/* Angular corners on the outer frames. A HUD is cut, not rounded, and the
+   two-corner bevel reads as machined where a border-radius reads as a card.
+   Only the outermost frames get it — doing it to every list row would be
+   costume rather than construction. */
+.panel, .rail{
+  clip-path:polygon(
+    14px 0, 100% 0, 100% calc(100% - 14px),
+    calc(100% - 14px) 100%, 0 100%, 0 14px
+  );
+}
+
+/* Chrome type: thin geometric sans with wide tracking, as the films use.
+   Data stays monospace — a column of numbers that does not align is a worse
+   sin than a slightly off-reference label. */
+.brand, .mode-banner, .tab, .badge, h3, h4,
+.reactor-legend, .con-kind, .impact, .job-state{
+  font-family:ui-sans-serif, "Segoe UI", system-ui, -apple-system, sans-serif;
+}
+
+@media (max-width:900px){
+  .reactor-bay{flex-direction:column; align-items:flex-start}
+  #statusReactor{width:140px; height:140px}
+}
+
+/* ── memory trust ─────────────────────────────────────────────────────── */
+/* Three states, and the distinction is the whole panel. The left edge carries
+   it as well as the tag, because a scanning eye reads position before it reads
+   a word — and there is no control anywhere that turns tainted into trusted. */
+
+.trust-list{list-style:none; display:flex; flex-direction:column; gap:6px;
+            margin-bottom:13px}
+.mem-trust-row{
+  display:flex; flex-direction:column; gap:5px;
+  padding:8px 10px; border-left:3px solid var(--border);
+  background:rgba(79,216,255,.02); font-size:11px;
+}
+.trust-tag{
+  font-size:9px; letter-spacing:.14em; text-transform:uppercase;
+  align-self:flex-start; padding:1px 6px; border:1px solid currentColor;
+}
+.trust-trusted{border-left-color:var(--accent-soft)}
+.trust-trusted .trust-tag{color:var(--accent)}
+/* Gold, like everything else on this page that needs a person. */
+.trust-proposed{border-left-color:var(--gold); background:rgba(255,181,69,.05)}
+.trust-proposed .trust-tag{color:var(--gold)}
+/* Red is not "broken" here — it is "came from outside". The strongest signal
+   available, because a laundered memory is the failure this system spent two
+   commits closing. */
+.trust-tainted{border-left-color:var(--red); background:rgba(255,93,93,.05)}
+.trust-tainted .trust-tag{color:var(--red)}
+
+/* ── system panel rows ──────────────────────────────────────────────────── */
+/* `.kv` has been used by the System panel since Phase 1 and never had a rule,
+   so every row rendered as two spans jammed together: "READALLOW",
+   "Anthropic (Claude)configured". Noticed only when the model dropdowns landed
+   beside them and the panel got looked at properly. Label left, value right,
+   which is what the markup always meant. */
+.kv{
+  display:flex; align-items:baseline; justify-content:space-between;
+  gap:12px; font-size:11px; line-height:1.5;
+}
+/* The nowrap goes on the *value*, not the label. A grant scope can be an
+   entire URL, and holding that side rigid squeezed the value to nothing —
+   rendering "ALLOW" one letter per line. The label is the side that can
+   afford to wrap. */
+.kv > span:first-child{color:var(--muted); min-width:0; word-break:break-word}
+.kv > span:last-child{color:var(--text); text-align:right; white-space:nowrap}
+
+/* ── model pickers ──────────────────────────────────────────────────────── */
+/* A real <select>, not a bespoke listbox. The native control already handles
+   keyboard, screen readers and the small-screen case, and a hand-rolled
+   replacement would trade all three for a nicer arrow. Styled to sit in the
+   panel rather than to disguise what it is. */
+.model-picker{align-items:center}
+.model-select{
+  /* A fixed basis rather than shrink-to-fit, so three dropdowns of different
+     model-name lengths line up as a column instead of stepping raggedly. */
+  flex:0 0 62%; min-width:0;
+  background:var(--sunk); color:var(--text);
+  border:1px solid var(--border); border-radius:3px;
+  padding:4px 7px; font:inherit; font-size:11px;
+  cursor:pointer;
+}
+.model-select:hover:not(:disabled){border-color:var(--border-hot)}
+.model-select:focus-visible{outline:1px solid var(--accent); outline-offset:1px}
+/* Disabled while a change is in flight, so a second selection cannot race the
+   first and leave the panel disagreeing with the server. */
+.model-select:disabled{opacity:.5; cursor:progress}
+/* The dropdown itself is painted by the OS, which does not inherit the page
+   palette — set both so the open list is not black-on-black or white-on-white
+   depending on the platform. */
+.model-select option{background:var(--card); color:var(--text)}
+
+/* ── subsystem readiness ────────────────────────────────────────────────── */
+/* Green/amber would put the whole meaning in colour. The words "ready" and
+   "unavailable" carry it, and the colour only reinforces — same reasoning as
+   the memory trust tags. */
+.subsystem{margin-top:2px}
+.sub-ready{color:var(--accent)}
+.sub-unavailable{color:var(--gold)}
+/* Neither claim: nobody has looked yet. Dim rather than gold, so it does not
+   read as a problem to go and fix. */
+.sub-unknown{color:var(--dim)}
+.sub-detail{
+  font-size:10px; line-height:1.5; color:var(--dim);
+  margin:0 0 6px 10px; padding-left:8px;
+  border-left:1px solid var(--border);
+}
