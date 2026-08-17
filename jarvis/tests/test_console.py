@@ -271,3 +271,74 @@ def test_the_right_token_reaches_the_console_apis(locked_client) -> None:
     headers = {"Authorization": "Bearer test-token-abcdefghijklmnop"}
     assert locked_client.get("/api/agents", headers=headers).status_code == 200
     assert locked_client.get("/api/security", headers=headers).status_code == 200
+
+
+# ── computer and browser panels ──────────────────────────────────────────────
+
+
+def test_no_element_id_appears_twice(client: TestClient) -> None:
+    """A duplicate id makes getElementById return the first match, so one of
+    the two controls silently stops working.
+
+    Caught for real: the console's Observe button collided with the existing
+    Computer tab's, which would have left one of them dead with no error
+    anywhere.
+    """
+    import collections
+    import re
+
+    ids = re.findall(r'id="([^"]+)"', client.get("/").text)
+    dupes = [i for i, n in collections.Counter(ids).items() if n > 1]
+    assert dupes == [], f"duplicate element ids: {dupes}"
+
+
+def test_desktop_observation_goes_through_the_policy_engine(
+    client: TestClient
+) -> None:
+    """The console calls /computer/observe, which runs the action through
+    ComputerService.execute_action like any other.
+
+    So a machine with no display, or a user without the SCREEN scope, gets a
+    refusal rather than a blank panel — and the console never touches a
+    backend directly.
+    """
+    code = _console_code(client)
+    assert "/computer/observe" in code
+    # Reading `data.computer.backend` off a status payload is fine; what must
+    # not appear is anything that *drives* one, or the raw action endpoint
+    # that would let the console compose a click of its own.
+    for forbidden in ("X11Backend", "WindowsBackend", "xtest", "pyautogui",
+                      "/computer/action", "execute_action"):
+        assert forbidden not in code, f"console.js reaches {forbidden}"
+
+
+def test_the_console_does_not_stream_the_screen(client: TestClient) -> None:
+    """Observation is pull-based, because a live screenshot feed is a
+    recording, and a recording of somebody's desktop is the thing this system
+    most has to not become."""
+    code = _console_code(client)
+    assert "setInterval" not in code
+    assert "addEventListener(\"click\", observe)" in code
+
+
+def test_the_browser_panel_offers_no_take_control(client: TestClient) -> None:
+    """Handing a human the keyboard on a page JARVIS opened means their next
+    click happens in a context the policy engine authorised for JARVIS, and
+    the backend cannot tell the two apart afterwards. Closing the page is the
+    honest version, and it is a tool call."""
+    code = _console_code(client)
+    for forbidden in ("take_control", "takeControl", "browser_click",
+                      "browser_navigate"):
+        assert forbidden not in code, f"console.js contains {forbidden}"
+
+
+def test_the_status_browser_block_carries_no_page_titles(client: TestClient) -> None:
+    """Ids and addresses only.
+
+    A title is page-authored, and the rest of that block is configuration.
+    Mixing untrusted text into it would make one dict two trust levels, which
+    is how a consumer forgets which half needs escaping.
+    """
+    body = client.get("/api/security").json()
+    for page in body["browser"].get("pages", []):
+        assert set(page) == {"page_id", "url"}

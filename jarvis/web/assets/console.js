@@ -193,6 +193,8 @@
     state.stopped = !!(data.emergency_stop && data.emergency_stop.engaged);
     paintMode(state.mode, state.stopped);
 
+    if (data.browser) paintBrowser(data.browser);
+
     const list = $("securityList");
     if (!list) return;
     clear(list);
@@ -232,6 +234,102 @@
       }
     }
   }
+
+  /* ── browser ────────────────────────────────────────────────────────────
+     Read-only, and the panel says so. "Take control" is deliberately not a
+     button here: handing a human the keyboard on a page JARVIS opened means
+     the human's next click happens in a context the policy engine authorised
+     for JARVIS, and there is no way for the backend to tell the two apart
+     afterwards. Closing the page is the honest version of that, and it is a
+     tool call. */
+
+  function paintBrowser(browser) {
+    const list = $("browserList");
+    if (!list) return;
+    clear(list);
+
+    const rows = [
+      ["Running", browser.running ? "yes" : "not started"],
+      ["Pages open", String(browser.pages_open)],
+      ["Reaches localhost", browser.allow_localhost ? "allowed" : "refused"],
+      ["Reaches private networks",
+       browser.allow_private_networks ? "allowed" : "refused"],
+      ["Window", browser.headless ? "hidden" : "visible"],
+      ["Storage", browser.persists_storage ? "persists" : "discarded on exit"],
+    ];
+    for (const [label, value] of rows) {
+      const row = node("li", "sec-row");
+      row.appendChild(node("span", "sec-label", label));
+      row.appendChild(node("span", "sec-value", value));
+      list.appendChild(row);
+    }
+    for (const page of browser.pages || []) {
+      const row = node("li", "sec-row");
+      row.appendChild(node("span", "sec-label", page.page_id));
+      // Page-authored. textContent, like everything else here.
+      row.appendChild(node("span", "sec-value", page.url));
+      list.appendChild(row);
+    }
+  }
+
+  /* ── computer ───────────────────────────────────────────────────────────
+     Observation is pull-based, because §35 says do not continuously record the
+     screen. A live screenshot feed would be a recording, and a recording of
+     somebody's desktop is the thing this system most has to not become.
+
+     The request goes through /computer/observe, which runs the action through
+     the policy engine like any other — so a machine with no display, or a user
+     without the SCREEN scope, gets a refusal rather than a blank panel. */
+
+  async function observe() {
+    const status = $("computerStatus");
+    const image = $("computerShot");
+    const windows = $("windowList");
+    if (!window.jarvisApi || !status) return;
+
+    status.textContent = "observing…";
+    let data;
+    try {
+      data = await window.jarvisApi("/computer/observe?include_image=true");
+    } catch (error) {
+      // Named, because "observation failed" does not tell anyone whether the
+      // machine has no display or they lack the permission.
+      status.textContent = error.message || "observation refused";
+      return;
+    }
+
+    status.textContent = data.active_window
+      ? "active: " + (data.active_window.title || data.active_window.application)
+      : "no active window";
+
+    if (image) {
+      if (data.screenshot_id) {
+        image.hidden = false;
+        image.src = "/api/computer/screenshot/" + encodeURIComponent(data.screenshot_id);
+      } else {
+        image.hidden = true;
+      }
+    }
+
+    if (windows) {
+      clear(windows);
+      // The structured half, which the brief asks to complement the picture
+      // rather than be replaced by it: a named window survives the desktop
+      // moving, and a screenshot does not.
+      for (const win of data.windows || []) {
+        const row = node("li", "sec-row");
+        row.appendChild(node("span", "sec-label", win.title || "(untitled)"));
+        row.appendChild(node("span", "sec-value", win.application || ""));
+        windows.appendChild(row);
+      }
+      if (!(data.windows || []).length) {
+        windows.appendChild(node("li", "empty-state", "No windows reported."));
+      }
+    }
+  }
+
+  const observeBtn = $("console_observeBtn");
+  if (observeBtn) observeBtn.addEventListener("click", observe);
 
   /* ── the stream ─────────────────────────────────────────────────────────── */
 

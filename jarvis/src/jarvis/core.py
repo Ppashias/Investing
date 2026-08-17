@@ -300,6 +300,14 @@ class JarvisCore:
                 "persists_storage": self.browser.settings.persists_storage,
                 "pages_open": self.browser.page_count,
                 "running": self.browser.started,
+                # Ids and addresses only. Deliberately not titles: a title is
+                # page-authored and this block is read by a status endpoint
+                # whose other fields are all configuration — mixing untrusted
+                # text into it would make one dict two trust levels.
+                "pages": [
+                    {"page_id": handle.page_id, "url": handle.page.url}
+                    for handle in self.browser.pages()
+                ],
             },
             "embeddings": {
                 "provider": self.embeddings.info.key,
