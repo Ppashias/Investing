@@ -49,7 +49,7 @@ class CapabilityReport:
 
     #: A display JARVIS can drive — physical or virtual.
     display: str | None = None
-    display_kind: str = "none"        # none | x11 | x11-virtual | wayland
+    display_kind: str = "none"  # none | x11 | x11-virtual | wayland | windows
     screen_width: int = 0
     screen_height: int = 0
 
@@ -92,18 +92,28 @@ class CapabilityReport:
             ActionKind.WRITE_CLIPBOARD,
         }
         if kind in display_needed and not self.display:
-            if self.os_name in {"Windows", "Darwin"}:
-                # Not "headless", and emphatically not "install Xvfb". The
-                # machine has a screen; JARVIS has no backend for it, and Xvfb
-                # would not give it one — X11 automation of an X server does
-                # not reach a single Windows or macOS application. Naming a
-                # remedy that cannot work is how a user concludes their setup
-                # is broken rather than that the feature does not exist.
+            if self.os_name == "Windows":
+                # A backend exists here; what is missing is its optional
+                # dependency. Saying "not implemented" when the remedy is one
+                # pip install is the more expensive lie of the two: the user
+                # stops looking.
                 return (
-                    f"JARVIS has no {self.os_name} computer-control backend. "
-                    "Only X11 is implemented, and screen, mouse and keyboard "
-                    f"control of a {self.os_name} desktop is not available at "
-                    "all — this is a missing feature, not a misconfiguration."
+                    "Windows desktop control needs pywinauto, which is not "
+                    "installed. Run 'pip install pywinauto pillow' and restart "
+                    "JARVIS."
+                )
+            if self.os_name == "Darwin":
+                # Still true, and emphatically not "install Xvfb". The machine
+                # has a screen; JARVIS has no backend for it, and Xvfb would
+                # not give it one — X11 automation of an X server does not
+                # reach a single macOS application. Naming a remedy that cannot
+                # work is how a user concludes their setup is broken rather
+                # than that the feature does not exist.
+                return (
+                    "JARVIS has no macOS computer-control backend. X11 and "
+                    "Windows are implemented; screen, mouse and keyboard "
+                    "control of a macOS desktop is not available at all — this "
+                    "is a missing feature, not a misconfiguration."
                 )
             if self.can_create_virtual_display:
                 return (
@@ -116,14 +126,32 @@ class CapabilityReport:
                 "nothing to observe or control."
             )
 
+        if kind in {ActionKind.SCREENSHOT, ActionKind.OBSERVE_SCREEN} \
+                and not self.has_screenshot:
+            # Never reachable while X11 was the only backend — a connected
+            # display always implied capture. Windows separates them: Pillow
+            # can be missing while UI Automation is present, and the honest
+            # answer is that this one action is unavailable, not that the
+            # desktop is.
+            if self.display_kind == "windows":
+                return (
+                    "Screenshots need Pillow, which is not installed. Run "
+                    "'pip install pillow' and restart JARVIS. Window and "
+                    "element queries work without it."
+                )
+            return "This display cannot be captured."
+
+        # Below here a display exists, so the remedy is display-server
+        # specific. Naming XTEST on Windows would send the user looking for an
+        # X11 extension on a machine that has no X server and needs none.
         if kind in {ActionKind.MOVE_MOUSE, ActionKind.CLICK, ActionKind.DOUBLE_CLICK,
                     ActionKind.RIGHT_CLICK, ActionKind.DRAG, ActionKind.SCROLL} \
                 and not self.has_pointer_input:
-            return "Pointer input needs the X11 XTEST extension, which is absent."
+            return self._input_unavailable("Pointer")
 
         if kind in {ActionKind.TYPE_TEXT, ActionKind.PRESS_KEY, ActionKind.HOTKEY} \
                 and not self.has_keyboard_input:
-            return "Keyboard input needs the X11 XTEST extension, which is absent."
+            return self._input_unavailable("Keyboard")
 
         if kind in {ActionKind.READ_CLIPBOARD, ActionKind.WRITE_CLIPBOARD} \
                 and not self.has_clipboard:
@@ -133,6 +161,14 @@ class CapabilityReport:
             return "No shell environment is available."
 
         return None
+
+    def _input_unavailable(self, what: str) -> str:
+        if self.display_kind == "windows":
+            return (
+                f"{what} input is unavailable: pywinauto could not be loaded. "
+                "Run 'pip install pywinauto pillow' and restart JARVIS."
+            )
+        return f"{what} input needs the X11 XTEST extension, which is absent."
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -224,38 +260,30 @@ def detect(*, probe_display: str | None = None) -> CapabilityReport:
     # ── accessibility ────────────────────────────────────────────────────────
     # Checked before the display, because §4 asks that structured
     # accessibility data be preferred over pixels when it exists.
-    report.has_accessibility = _detect_accessibility()
-    if not report.has_accessibility:
-        report.notes.append(
-            "No accessibility bus (AT-SPI/dbus). Structured UI element data is "
-            "unavailable, so targeting falls back to window geometry plus "
-            "visual coordinates."
-        )
+    # AT-SPI is the Linux answer to this question. Windows has its own
+    # (UI Automation, decided in _detect_windows) and telling a Windows user
+    # their dbus is missing is noise about a bus their machine does not have.
+    if platform.system() not in {"Windows", "Darwin"}:
+        report.has_accessibility = _detect_accessibility()
+        if not report.has_accessibility:
+            report.notes.append(
+                "No accessibility bus (AT-SPI/dbus). Structured UI element data "
+                "is unavailable, so targeting falls back to window geometry plus "
+                "visual coordinates."
+            )
 
     # ── display ──────────────────────────────────────────────────────────────
     wayland = os.environ.get("WAYLAND_DISPLAY")
     x_display = probe_display or os.environ.get("DISPLAY")
 
     if report.os_name in {"Windows", "Darwin"}:
-        # Decided before anything is probed, and deliberately regardless of
-        # DISPLAY. Running an X server on Windows is ordinary — VcXsrv, X410,
-        # WSLg all set DISPLAY — and probing it would succeed: a real X server
-        # with XTEST, a width and a height. JARVIS would then report a physical
+        # Decided before the X11 probe, and deliberately regardless of DISPLAY.
+        # Running an X server on Windows is ordinary — VcXsrv, X410, WSLg all
+        # set DISPLAY — and probing it would succeed: a real X server with
+        # XTEST, a width and a height. JARVIS would then report a physical
         # display and working pointer input on a machine where it cannot click
         # a single Windows window. The automation would be real and entirely
         # beside the point.
-        #
-        # "Headless" would be a lie about a machine with a monitor in front of
-        # it. The screen is there; JARVIS has no backend for it. Saying so is
-        # the difference between a user thinking their setup is broken and
-        # knowing the feature is not built.
-        report.notes.append(
-            f"{report.os_name} desktop detected. JARVIS has no "
-            f"{report.os_name} computer-control backend — only X11 is "
-            "implemented — so screen, mouse and keyboard actions are "
-            "unavailable here. Everything else, including Obsidian, the "
-            "knowledge base and the terminal, works normally."
-        )
         if x_display or wayland:
             report.notes.append(
                 f"DISPLAY is set ({x_display or wayland}), but an X server on "
@@ -263,6 +291,19 @@ def detect(*, probe_display: str | None = None) -> CapabilityReport:
                 f"{report.os_name} applications. Driving it would not touch "
                 "the user's desktop, so it is not reported as one."
             )
+        if report.os_name == "Windows":
+            return _detect_windows(report)
+
+        # "Headless" would be a lie about a machine with a monitor in front of
+        # it. The screen is there; JARVIS has no backend for it. Saying so is
+        # the difference between a user thinking their setup is broken and
+        # knowing the feature is not built.
+        report.notes.append(
+            "macOS desktop detected. JARVIS has no macOS computer-control "
+            "backend — X11 and Windows are implemented — so screen, mouse and "
+            "keyboard actions are unavailable here. Everything else, including "
+            "Obsidian, the knowledge base and the terminal, works normally."
+        )
         return _finalise(report)
 
     if wayland and not x_display:
@@ -317,6 +358,102 @@ def detect(*, probe_display: str | None = None) -> CapabilityReport:
             "minimise/maximise are unavailable; raise, focus and geometry work."
         )
     return _finalise(report)
+
+
+def _detect_windows(report: CapabilityReport) -> CapabilityReport:
+    """Windows capability, decided by the optional dependencies rather than by
+    a display server.
+
+    UNVERIFIED — WINDOWS RUNTIME: written and tested on Linux against fakes.
+    The import probes and the branching are exercised; the screen metrics call
+    is not, because ``ctypes.windll`` does not exist here.
+
+    The distinction this function draws is the one the previous version got
+    wrong. There *is* a Windows backend
+    (:class:`~jarvis.computer.backends.windows.WindowsBackend`); what a bare
+    machine lacks is ``pywinauto``. Reporting "no backend exists" when the
+    remedy is one install is the more expensive of the two possible lies,
+    because a user who believes a feature is unbuilt stops looking for the fix.
+
+    Capability is asserted from the import rather than measured by driving
+    something. That is weaker than the X11 path, which asks the server what it
+    supports — but Windows has no equivalent question to ask: UI Automation is
+    part of the OS, not an extension that may be compiled out. The failure mode
+    is therefore a real attempt that fails with a clear backend error, rather
+    than a silent refusal, which is the right way round.
+    """
+    if not _module_present("pywinauto"):
+        report.notes.append(
+            "Windows desktop control needs pywinauto, which is not installed. "
+            "Run 'pip install pywinauto pillow' and restart JARVIS. Everything "
+            "else — Obsidian, the knowledge base and the terminal — works "
+            "without it."
+        )
+        return _finalise(report)
+
+    report.display = "windows"
+    report.display_kind = "windows"
+    report.has_physical_display = True
+    report.has_pointer_input = True
+    report.has_keyboard_input = True
+    report.has_window_enumeration = True
+    report.has_clipboard = True
+    #: A window manager in the X11 sense — something that may or may not be
+    #: running. On Windows the shell is not optional, so raise, focus and
+    #: geometry are always available.
+    report.has_window_manager = True
+    #: UI Automation *is* the accessibility layer here, and it is what
+    #: ``WindowsBackend.elements`` reads. Reporting False because dbus is
+    #: absent would tell the model to fall back to coordinates on the one
+    #: platform where named elements are most reliably available.
+    report.has_accessibility = True
+    report.screen_width, report.screen_height = _windows_screen_size()
+
+    # Kept separate from pywinauto: element and window queries do not need
+    # Pillow, and refusing them because screenshots are unavailable would
+    # withdraw the better targeting method over the worse one's dependency.
+    if _module_present("PIL"):
+        report.has_screenshot = True
+    else:
+        report.notes.append(
+            "Pillow is not installed, so screenshots are unavailable. Window "
+            "and element queries still work — and are the preferred way to "
+            "target something in any case. 'pip install pillow' enables them."
+        )
+    return _finalise(report)
+
+
+def _module_present(name: str) -> bool:
+    """Whether an optional dependency can be imported.
+
+    ``find_spec`` rather than ``import``: this runs at startup, and importing
+    pywinauto builds a COM connection to UI Automation as a side effect. Asking
+    whether it *could* be imported is the question here.
+    """
+    import importlib.util
+
+    try:
+        return importlib.util.find_spec(name) is not None
+    except (ImportError, ValueError):  # a broken or namespace-shadowed install
+        return False
+
+
+def _windows_screen_size() -> tuple[int, int]:
+    """Primary monitor size, or zeros if it cannot be read.
+
+    Zeros rather than a guess: a wrong screen size makes every coordinate the
+    model computes wrong in a way nothing downstream would catch, whereas zero
+    is visibly unset.
+    """
+    try:
+        import ctypes
+
+        user32 = ctypes.windll.user32  # type: ignore[attr-defined]
+        # SM_CXSCREEN / SM_CYSCREEN, matching WindowsBackend.screen_size().
+        return int(user32.GetSystemMetrics(0)), int(user32.GetSystemMetrics(1))
+    except Exception as exc:  # pragma: no cover - needs Windows
+        log.warning("windows_screen_metrics_failed", error=str(exc))
+        return 0, 0
 
 
 def _finalise(report: CapabilityReport) -> CapabilityReport:

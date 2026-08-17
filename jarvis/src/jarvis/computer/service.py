@@ -126,12 +126,16 @@ class ComputerService:
                 self._display, self._virtual_display = started
                 self.capabilities = detect(probe_display=self._display)
 
-        if platform.system() == "Windows":
-            # Windows has no X display and never will, so the display probe
-            # above says "no desktop" on a machine that plainly has one. The
-            # platform answers this question, not the display server.
-            #
+        if platform.system() == "Windows" and self.capabilities.display:
             # UNVERIFIED — WINDOWS RUNTIME: this branch has never executed.
+            #
+            # `capabilities.display` is the gate rather than the platform
+            # alone. detect() sets it only once pywinauto is importable, and
+            # binding the backend anyway when it is not produced the defect
+            # this replaced: a service reporting backend=windows while every
+            # action was refused by the capability check above it. Two places
+            # disagreed about whether the desktop was reachable, and the user
+            # was told the feature did not exist.
             from jarvis.computer.backends.windows import WindowsBackend
 
             try:

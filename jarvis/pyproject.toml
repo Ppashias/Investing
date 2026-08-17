@@ -29,6 +29,17 @@ dependencies = [
     # extra: without it `create_app` raises while building the route table, so
     # the whole API fails to start, not just uploads.
     "python-multipart>=0.0.9",
+    # Time zones. Python on Windows ships no tz database at all, so zoneinfo
+    # raises for every name including "UTC" — which made get_current_time, a
+    # built-in tool, fail on a stock Windows install. Unix installs already
+    # have the system database and this is a no-op there.
+    "tzdata>=2024.1; sys_platform == 'win32'",
+    # Process enumeration, used by capability detection and Obsidian vault
+    # discovery. Both degrade to a note rather than an error when it is
+    # missing, but the note was appearing on every Windows start, and "install
+    # this to see your processes" is a worse first impression than shipping a
+    # pure-Python package that weighs almost nothing.
+    "psutil>=5.9",
 ]
 
 [project.optional-dependencies]
@@ -42,6 +53,13 @@ keyring = ["keyring>=25.0"]
 # Installing the package is not enough on its own — `playwright install chromium`
 # fetches the browser, and detection says so when it is missing.
 browser = ["playwright>=1.40"]
+# Windows desktop control (Phase D, item 9). An extra for the same reason
+# `browser` is: jarvis.computer.capabilities.detect reports its absence as an
+# unavailable capability naming the install command, and a JARVIS that never
+# touches the desktop should not be unable to start without it. Pillow is
+# separate from pywinauto inside the detection because screenshots and element
+# queries fail independently.
+windows = ["pywinauto>=0.6.8; sys_platform == 'win32'", "pillow>=10"]
 dev = ["pytest>=8", "pytest-asyncio>=0.23", "anyio>=4"]
 
 [build-system]

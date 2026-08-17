@@ -396,3 +396,27 @@ async def test_every_execution_is_recorded(session, user) -> None:
         )
     count = (await session.execute(select(func.count(ToolExecution.id)))).scalar_one()
     assert count == 3
+
+
+def test_the_windows_timezone_database_is_a_declared_dependency() -> None:
+    """`get_current_time` failed on a stock Windows install, for "UTC".
+
+    Python on Windows ships no timezone database, and `zoneinfo` falls back to
+    the `tzdata` package — so with it absent every name raises, including the
+    tool's own default. A built-in tool that cannot report the time is a poor
+    advertisement for the rest.
+
+    Pinned against pyproject rather than by driving the tool, because this
+    machine has a system tz database and cannot reproduce the failure. That is
+    a weaker test than usual and it is the honest one available here: it
+    catches the dependency being dropped, which is how the bug would return.
+    """
+    import tomllib
+    from pathlib import Path
+
+    manifest = Path(__file__).resolve().parents[1] / "pyproject.toml"
+    declared = tomllib.loads(manifest.read_text())["project"]["dependencies"]
+
+    tz = [line for line in declared if line.startswith("tzdata")]
+    assert tz, "tzdata is not declared; get_current_time breaks on Windows"
+    assert "win32" in tz[0], "the marker should keep it off platforms that have one"

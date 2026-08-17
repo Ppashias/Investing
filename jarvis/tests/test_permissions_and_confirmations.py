@@ -731,3 +731,38 @@ async def test_an_unknown_condition_key_is_ignored(session, user) -> None:
 
     with _at(11):
         assert (await _ask(session, user)).mode is PermissionMode.ALLOW
+
+
+async def test_an_approval_expires_at_its_ttl_not_after_it(session, user) -> None:
+    """The boundary, pinned without depending on how fast the clock ticks.
+
+    The existing zero-TTL test passed on Linux for the wrong reason — real time
+    elapsed between deciding and checking, so `age > 0` held. On Windows the
+    clock's ~15ms granularity returns the same instant, `0.0 > 0` is False, and
+    an approval that was meant to be unusable authorised the action. Asserted
+    here by placing `decided_at` at exactly the TTL rather than by racing the
+    clock, so it fails on either platform if the comparison loosens again.
+    """
+    from datetime import timedelta
+
+    from jarvis.db.base import utcnow
+
+    service = ConfirmationService(session, ttl_seconds=900, approval_ttl_seconds=60)
+    created = await service.request(_request(user.id))
+    await service.decide(created.id, approved=True)
+
+    created.decided_at = utcnow() - timedelta(seconds=60)
+    await session.flush()
+    assert service._approval_is_stale(created) is True
+
+    # …and a hair inside it still authorises, so the fix did not simply expire
+    # everything.
+    created.decided_at = utcnow() - timedelta(seconds=59)
+    await session.flush()
+    assert service._approval_is_stale(created) is False
+
+    # Naive timestamps come back from SQLite; the check must not treat one as
+    # fresh just because it lacks a zone.
+    created.decided_at = (utcnow() - timedelta(seconds=61)).replace(tzinfo=None)
+    await session.flush()
+    assert service._approval_is_stale(created) is True

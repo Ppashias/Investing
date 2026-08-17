@@ -748,3 +748,126 @@ def test_the_orchestrator_wires_the_emergency_stop() -> None:
 
     source = inspect.getsource(Orchestrator._make_executor)
     assert "emergency_stop=" in source
+
+
+# ── Windows detection (Phase D, item 9) ──────────────────────────────────────
+#
+# UNVERIFIED — WINDOWS RUNTIME for the input paths; what follows is verified.
+# These drive `detect()` with `platform.system` and the module probe faked, so
+# the branching, the notes and the capability flags are exercised on Linux.
+# The one thing they cannot reach is `_windows_screen_size`, which needs
+# `ctypes.windll`.
+
+
+def _windows_report(monkeypatch, *, pywinauto: bool, pillow: bool = True):
+    """Run the real `detect()` as though this were Windows with those modules."""
+    import platform as platform_module
+
+    from jarvis.computer import capabilities as caps
+
+    monkeypatch.setattr(platform_module, "system", lambda: "Windows")
+    monkeypatch.setattr(caps.platform, "system", lambda: "Windows")
+    monkeypatch.setattr(
+        caps, "_module_present",
+        lambda name: pywinauto if name == "pywinauto" else pillow,
+    )
+    monkeypatch.setattr(caps, "_windows_screen_size", lambda: (2560, 1440))
+    monkeypatch.setattr(caps, "_discover_applications", lambda: {})
+    return caps.detect()
+
+
+def test_windows_with_its_dependencies_reports_a_usable_desktop(monkeypatch) -> None:
+    """The defect this replaced, stated as an assertion.
+
+    `WindowsBackend` was wired into the service while `detect()` still returned
+    the note it carried before that backend existed — so the service logged
+    `backend=windows` and every screen, mouse and keyboard action was refused
+    above it by `reason_unavailable`, which gates on `display`. Two parts of
+    one subsystem disagreed about whether the desktop was reachable, and the
+    user was told the feature was not built.
+    """
+    report = _windows_report(monkeypatch, pywinauto=True)
+
+    assert report.display == "windows"
+    assert report.display_kind == "windows"
+    assert report.has_physical_display
+    assert (report.screen_width, report.screen_height) == (2560, 1440)
+    for kind in (ActionKind.SCREENSHOT, ActionKind.CLICK, ActionKind.TYPE_TEXT,
+                 ActionKind.GET_WINDOWS, ActionKind.FOCUS_WINDOW):
+        assert report.reason_unavailable(kind) is None, kind
+
+    # And nothing still claims the backend does not exist.
+    assert not any("no Windows computer-control" in note for note in report.notes)
+    assert not any("only X11 is implemented" in note.lower()
+                   for note in report.notes)
+
+
+def test_windows_ui_automation_counts_as_accessibility(monkeypatch) -> None:
+    """UIA is the accessibility layer here, and it is what `elements` reads.
+
+    Reporting False because dbus is absent would push the model to coordinates
+    on the one platform where named elements are most reliably available — the
+    opposite of what the backend was built to do.
+    """
+    report = _windows_report(monkeypatch, pywinauto=True)
+
+    assert report.has_accessibility
+    assert not any("AT-SPI" in note for note in report.notes), \
+        "a Windows machine was told about a bus it does not have"
+
+
+def test_windows_without_pywinauto_names_the_install(monkeypatch) -> None:
+    """"Not implemented" and "not installed" are different facts.
+
+    The first makes a user stop looking. The remedy here is one pip install, so
+    the refusal has to say so.
+    """
+    report = _windows_report(monkeypatch, pywinauto=False)
+
+    assert report.display is None
+    reason = report.reason_unavailable(ActionKind.CLICK)
+    assert reason and "pywinauto" in reason
+    assert "X11" not in reason and "Xvfb" not in reason
+    assert any("pip install pywinauto" in note for note in report.notes)
+
+
+def test_missing_pillow_costs_screenshots_and_nothing_else(monkeypatch) -> None:
+    """Element and window queries do not need Pillow, and withdrawing the
+    better targeting method over the worse one's dependency would be a poor
+    trade."""
+    report = _windows_report(monkeypatch, pywinauto=True, pillow=False)
+
+    assert report.reason_unavailable(ActionKind.SCREENSHOT) is not None
+    assert report.reason_unavailable(ActionKind.GET_WINDOWS) is None
+    assert report.reason_unavailable(ActionKind.CLICK) is None
+    assert any("pillow" in note.lower() for note in report.notes)
+
+
+def test_an_x_server_on_windows_is_still_not_the_desktop(monkeypatch) -> None:
+    """VcXsrv, X410 and WSLg all set DISPLAY, and probing one would succeed —
+    a real X server with XTEST that cannot click a single Windows window.
+    Driving it would be real automation of the wrong thing."""
+    monkeypatch.setenv("DISPLAY", ":0")
+    report = _windows_report(monkeypatch, pywinauto=True)
+
+    assert report.display == "windows"
+    assert report.display_kind == "windows"
+    assert any("separate display" in note for note in report.notes)
+
+
+def test_macos_still_says_the_feature_does_not_exist(monkeypatch) -> None:
+    """Unchanged, and it must stay unchanged: there is no macOS backend, so
+    naming a remedy would send someone chasing a fix that cannot work."""
+    import platform as platform_module
+
+    from jarvis.computer import capabilities as caps
+
+    monkeypatch.setattr(platform_module, "system", lambda: "Darwin")
+    monkeypatch.setattr(caps.platform, "system", lambda: "Darwin")
+    monkeypatch.setattr(caps, "_discover_applications", lambda: {})
+    report = caps.detect()
+
+    assert report.display is None
+    reason = report.reason_unavailable(ActionKind.CLICK)
+    assert reason and "no macOS computer-control backend" in reason
+    assert "install" not in reason.lower()

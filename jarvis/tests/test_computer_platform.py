@@ -20,6 +20,17 @@ and simulating a platform string is not the same as running on it.
 The distinction matters because the failure mode being guarded against *is*
 overclaiming, and a test that overclaimed its own reach would be an odd way to
 guard against it.
+
+## Since Phase D item 9, this file covers one of two Windows cases
+
+A Windows backend now exists, so "Windows" is no longer a single answer. This
+file is the machine *without* ``pywinauto``, where the honest report is still a
+refusal — but a refusal naming an install rather than declaring the feature
+unbuilt. The machine *with* it belongs in ``test_computer.py``.
+
+Getting that distinction wrong is what the item-9 defect was: ``detect()`` kept
+returning this file's answer after the backend shipped, so the service bound
+``WindowsBackend`` and every action was refused above it.
 """
 
 from __future__ import annotations
@@ -55,11 +66,25 @@ DISPLAY_ACTIONS = [
 
 @pytest.fixture
 def windows(monkeypatch: pytest.MonkeyPatch):
-    """Detection as it runs on a Windows desktop, with no X server."""
+    """A Windows desktop *without* pywinauto, and no X server.
+
+    The absence is now forced rather than inherited from whatever this machine
+    happens to have installed. When Phase D added `WindowsBackend`, "Windows"
+    stopped being one case and became two — with the optional dependency and
+    without it — and these tests are the second. Left implicit, they would have
+    quietly changed meaning on any machine where pywinauto was present, which
+    is the sort of test that reports success for a reason nobody chose.
+
+    The with-dependency case lives in
+    ``test_computer.py::test_windows_with_its_dependencies_reports_a_usable_desktop``.
+    """
 
     def _detect(**kwargs) -> CapabilityReport:
+        from jarvis.computer import capabilities as caps
+
         monkeypatch.setattr(platform, "system", lambda: "Windows")
         monkeypatch.setattr(platform, "release", lambda: "11")
+        monkeypatch.setattr(caps, "_module_present", lambda name: False)
         monkeypatch.delenv("DISPLAY", raising=False)
         monkeypatch.delenv("WAYLAND_DISPLAY", raising=False)
         return detect(**kwargs)
@@ -95,12 +120,12 @@ def test_windows_is_not_described_as_headless(windows) -> None:
     """A machine with a monitor in front of it is not headless.
 
     Calling it that sends the user looking for a display problem they do not
-    have, instead of understanding that the feature is not built.
+    have, instead of at the thing that is actually missing.
     """
     notes = " ".join(windows().notes)
     assert "headless" not in notes.lower()
     assert "Windows" in notes
-    assert "no Windows computer-control backend" in notes
+    assert "pywinauto" in notes
 
 
 def test_the_reason_does_not_offer_a_remedy_that_cannot_work(windows) -> None:
@@ -109,12 +134,19 @@ def test_the_reason_does_not_offer_a_remedy_that_cannot_work(windows) -> None:
     Xvfb would install and start; it would also be irrelevant, because X11
     automation of an X server does not reach a single Windows application.
     Naming a fix that cannot work is a worse answer than naming none.
+
+    What changed with Phase D item 9 is that a fix which *does* work now
+    exists. This test used to assert the words "missing feature, not a
+    misconfiguration", and asserting them today would pin a statement that has
+    become false: there is a Windows backend, and one install reaches it. A
+    user told a feature is unbuilt stops looking, which is the more expensive
+    of the two available errors.
     """
     reason = windows().reason_unavailable(ActionKind.CLICK)
     assert "Xvfb" not in reason
+    assert "X11" not in reason
     assert "headless" not in reason.lower()
-    assert "missing feature, not a misconfiguration" in reason
-    assert "no Windows computer-control backend" in reason
+    assert "pip install pywinauto" in reason
 
 
 def test_an_x_server_on_windows_is_not_reported_as_the_desktop(
@@ -144,14 +176,23 @@ def test_an_x_server_on_windows_is_not_reported_as_the_desktop(
 
 
 def test_macos_gets_the_same_treatment(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Not Windows-specific: any platform without a backend must say so."""
+    """Not Windows-specific: any platform without a backend must say so.
+
+    macOS is now the only one, so this is where the "missing feature, not a
+    misconfiguration" wording lives — and it must offer no remedy, because
+    none exists. The reason says "macOS" rather than `platform.system()`'s
+    "Darwin": the user reads it, and they do not call their laptop Darwin.
+    """
     monkeypatch.setattr(platform, "system", lambda: "Darwin")
     monkeypatch.delenv("DISPLAY", raising=False)
     monkeypatch.delenv("WAYLAND_DISPLAY", raising=False)
 
     report = detect()
+    reason = report.reason_unavailable(ActionKind.CLICK)
     assert report.supports(ActionKind.CLICK) is False
-    assert "Darwin" in report.reason_unavailable(ActionKind.CLICK)
+    assert "macOS" in reason
+    assert "missing feature, not a misconfiguration" in reason
+    assert "install" not in reason.lower(), "there is no macOS remedy to offer"
 
 
 # ── what still works ─────────────────────────────────────────────────────────
@@ -256,7 +297,7 @@ async def test_an_unavailable_action_is_denied_not_asked(core, windows) -> None:
 
     assert decision.mode is PermissionMode.DENY
     assert "capability_unavailable" in decision.applied_rules
-    assert "no Windows computer-control backend" in decision.reason
+    assert "pywinauto" in decision.reason
     assert "Xvfb" not in decision.reason
 
 
@@ -367,7 +408,7 @@ async def test_the_model_is_told_why_a_click_is_impossible(core, windows) -> Non
         await session.commit()
 
     assert outcome.result.is_error is True
-    assert "no Windows computer-control backend" in outcome.result.content
+    assert "pywinauto" in outcome.result.content
     assert "Xvfb" not in outcome.result.content
 
 

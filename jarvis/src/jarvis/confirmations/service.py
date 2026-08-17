@@ -214,7 +214,17 @@ class ConfirmationService:
         if decided.tzinfo is None:
             decided = decided.replace(tzinfo=timezone.utc)
         age = (datetime.now(timezone.utc) - decided).total_seconds()
-        return age > self.approval_ttl_seconds
+        # `>=`, not `>`. At exactly the TTL the approval is spent: an expiry
+        # boundary in an authorisation check has to fail closed, and expiring a
+        # microsecond early costs the user one extra confirmation while
+        # expiring a microsecond late is an action taken on authority that had
+        # run out.
+        #
+        # The difference is not theoretical at ttl=0, which means "never
+        # reusable": `0.0 > 0` is False, so the approval authorised. Linux hid
+        # it because time always elapsed between deciding and checking; the
+        # coarser Windows clock returns the same instant and the grant stood.
+        return age >= self.approval_ttl_seconds
 
     async def consume(self, confirmation: Confirmation) -> None:
         """Mark an approval used, so it authorises exactly one execution."""
