@@ -561,3 +561,114 @@ def test_turn_taint_is_the_union_of_both_sources() -> None:
     from_context = blank()
     from_context.context_bundle = _Bundle()
     assert from_context.tainted is True
+
+
+# ── every memory write path, not just the one that was broken (item 2) ───────
+#
+# The ambient-capture fix closed the path the review found. Auditing the rest
+# found three more, all the same shape: taint is a fact about where a claim
+# came from, and every operation that *carried something else forward* had
+# quietly dropped it.
+
+
+async def _tainted_memory(session, user, content="The user banks with Example Bank"):
+    from jarvis.memory.service import MemoryDraft, MemoryService
+    from jarvis.db.models import MemorySource
+
+    outcome = await MemoryService(session).create(
+        user.id,
+        MemoryDraft(content=content, subject="banking",
+                    source=MemorySource.WEB),
+        actor="test",
+    )
+    await session.flush()
+    assert outcome.memory.tainted is True
+    return outcome.memory
+
+
+async def test_superseding_a_tainted_memory_keeps_the_taint(session, user) -> None:
+    """A clean-looking restatement must not launder the original.
+
+    The row beside this one already carried ``old.importance`` forward, so the
+    asymmetry was sitting in the same expression.
+    """
+    from jarvis.db.models import MemorySource
+    from jarvis.memory.service import MemoryDraft, MemoryService
+
+    old = await _tainted_memory(session, user)
+
+    service = MemoryService(session)
+    outcome = await service._supersede(
+        old,
+        MemoryDraft(content="The user banks with Example Bank plc",
+                    subject="banking", source=MemorySource.CONVERSATION),
+        subject="banking", vector=None, actor="test", request_id=None,
+    )
+    await session.flush()
+    assert outcome.memory.tainted is True, "superseding washed the taint off"
+
+
+async def test_merging_a_tainted_restatement_taints_the_survivor(
+    session, user
+) -> None:
+    """Merging is a union, and taint is part of what is being unioned.
+
+    The merge branch can replace the surviving row's *content* outright with
+    the draft's, so a tainted restatement could otherwise install page text
+    into a memory that stayed marked clean.
+    """
+    from jarvis.db.models import MemorySource
+    from jarvis.memory.service import MemoryDraft, MemoryService
+
+    clean = await MemoryService(session).create(
+        user.id,
+        MemoryDraft(content="The user likes dark interfaces",
+                    subject="interface theme"),
+        actor="test",
+    )
+    await session.flush()
+    assert clean.memory.tainted is False
+
+    service = MemoryService(session)
+    await service._merge_into(
+        clean.memory,
+        MemoryDraft(content="The user likes dark interfaces everywhere always",
+                    subject="interface theme", source=MemorySource.WEB,
+                    confidence=0.99),
+        score=0.95, actor="test", request_id=None,
+    )
+    await session.flush()
+    assert clean.memory.tainted is True
+
+
+async def test_taint_cannot_be_edited_away(session, user) -> None:
+    """``update()`` sets any attribute that exists by name, and ``update_memory``
+    reaches it from the model.
+
+    "This came from a web page" is a fact about where the claim came from, and
+    editing the claim does not change where it came from.
+    """
+    from jarvis.memory.service import MemoryService
+
+    memory = await _tainted_memory(session, user)
+    edited = await MemoryService(session).update(
+        memory.id, content="The user banks somewhere ordinary", tainted=False
+    )
+    await session.flush()
+    assert edited.tainted is True
+
+
+async def test_taint_can_still_be_added_by_an_edit(session, user) -> None:
+    """Monotonic means one-way, not frozen. Marking something untrusted must
+    stay possible, or a mistake could never be corrected in the safe direction.
+    """
+    from jarvis.memory.service import MemoryDraft, MemoryService
+
+    clean = await MemoryService(session).create(
+        user.id, MemoryDraft(content="Something ordinary", subject="x"),
+        actor="test",
+    )
+    await session.flush()
+
+    edited = await MemoryService(session).update(clean.memory.id, tainted=True)
+    assert edited.tainted is True

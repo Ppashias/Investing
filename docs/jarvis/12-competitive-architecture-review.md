@@ -408,7 +408,7 @@ Everything below is **NOT STARTED**. Nothing in this document has been built.
 | # | Item | Status |
 |---|---|---|
 | 1 | C2 taint-laundering fix | **VERIFIED** — 6 tests, mutation-checked |
-| 2 | Memory provenance + taint gate | **IMPLEMENTED** — provenance on the row; a broader audit of every write path is not done |
+| 2 | Memory provenance + taint gate | **VERIFIED** — every write path audited; three further laundering paths found and closed |
 | 3 | Emergency stop at the executor | **VERIFIED** — 7 tests |
 | 4 | Audit channel + impact classification | **VERIFIED** — 8 tests, migration `a3f1d90e77b2`, destructive-never-by-voice enforced |
 | 5 | Context rules | **VERIFIED** — 8 tests, no migration (grant conditions) |
@@ -422,7 +422,7 @@ Everything below is **NOT STARTED**. Nothing in this document has been built.
 | 13 | Telemetry | **VERIFIED** — 13 tests, local-only by design, `/api/system/telemetry` |
 | 14 | Voice | NOT STARTED |
 
-Nine of fourteen. Nothing above is called VERIFIED unless a test exercises the
+Ten of fourteen. Nothing above is called VERIFIED unless a test exercises the
 behaviour it claims — item 6 is IMPLEMENTED rather than VERIFIED because its
 authority model is tested and its integration with a real agent loop is not,
 and item 9 cannot be VERIFIED anywhere but Windows.

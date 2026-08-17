@@ -350,6 +350,13 @@ class MemoryService:
                                      high=0.95)
         existing.importance = max(existing.importance, _clamp(draft.resolved_importance()))
         existing.tags = sorted(set(existing.tags) | set(draft.tags))
+        # Merging is a union, and taint is part of what is being unioned. The
+        # branch below can replace ``existing.content`` outright with the
+        # draft's, so a tainted restatement could otherwise install page text
+        # into a memory that stayed marked clean.
+        existing.tainted = bool(
+            existing.tainted or draft.tainted or draft.source.is_external
+        )
         if draft.confidence >= existing.confidence and len(draft.content) > len(
             existing.content
         ):
@@ -393,7 +400,15 @@ class MemoryService:
             subject=subject,
             source=draft.source,
             source_ref=draft.source_ref.to_dict() if draft.source_ref else None,
-            tainted=draft.tainted or draft.source.is_external,
+            # ``old.tainted`` is part of this, and its absence was a laundering
+            # path: a clean-looking restatement superseding a memory that came
+            # from a web page produced a replacement marked trustworthy. The
+            # row next to it already carries ``old.importance`` forward, so the
+            # asymmetry was visible in the same expression.
+            #
+            # Taint is monotonic. A claim does not become trustworthy because
+            # it was said again.
+            tainted=draft.tainted or draft.source.is_external or old.tainted,
             confidence=_clamp(draft.confidence),
             importance=_clamp(max(draft.resolved_importance(), old.importance)),
             project_id=draft.project_id,
@@ -595,6 +610,14 @@ class MemoryService:
         applied: dict[str, Any] = {}
         for field_name, value in changes.items():
             if value is None or not hasattr(memory, field_name):
+                continue
+            if field_name == "tainted" and not value:
+                # Taint is monotonic and ``update()`` sets any attribute that
+                # exists by name, so without this a caller could clear it —
+                # including the model, through ``update_memory``. "This came
+                # from a web page" is a fact about where the claim came from,
+                # and editing the claim does not change where it came from.
+                log.warning("memory_taint_clear_refused", memory_id=memory.id)
                 continue
             before = getattr(memory, field_name)
             if isinstance(before, (MemoryType, MemoryStatus, MemorySource)):
