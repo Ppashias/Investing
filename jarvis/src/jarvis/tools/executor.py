@@ -480,6 +480,31 @@ class ToolExecutor:
         record: ToolExecution,
         decision: PermissionMode,
     ) -> ToolOutcome:
+        # Announced before it runs, not only after it returns.
+        #
+        # Until this existed the only TOOL_CALL record was the one below, which
+        # carries a terminal status — so the console's `tool.called` event was
+        # in the vocabulary and never once emitted, and a tool that takes
+        # thirty seconds showed nothing at all for thirty seconds. That is
+        # precisely the window in which somebody wants to know what JARVIS is
+        # doing, and an empty feed there reads as "nothing is happening".
+        #
+        # Deliberately *after* the permission decision and the confirmation
+        # check: an action that was refused or is waiting for approval has not
+        # been called, and saying so would make the feed claim JARVIS did
+        # something it did not do.
+        await self.activity.record(
+            ActivityKind.TOOL_CALL,
+            summary=f"{tool.name} …",
+            actor=f"tool:{tool.name}",
+            detail={"arguments": tool.for_audit(call.arguments)},
+            request_id=ctx.request_id,
+            conversation_id=ctx.conversation_id,
+            execution_id=record.id,
+            tool_name=tool.name,
+            status=ExecutionStatus.RUNNING.value,
+        )
+
         with timed() as clock:
             try:
                 result = await self._run_handler(tool, call, ctx, record)
