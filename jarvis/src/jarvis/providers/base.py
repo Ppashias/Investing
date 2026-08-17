@@ -265,6 +265,18 @@ class AIProvider(abc.ABC):
     @abc.abstractmethod
     def default_model(self) -> str: ...
 
+    @property
+    def runs_locally(self) -> bool:
+        """True when a prompt sent here never leaves the machine.
+
+        Concrete and defaulting to ``False``, which is the safe answer: a
+        provider that has not thought about this is a remote one until it says
+        otherwise. Privacy routing refuses to fall back to a remote provider,
+        so a wrong ``True`` here would send private text to a vendor while a
+        wrong ``False`` only costs an honest refusal.
+        """
+        return False
+
     @abc.abstractmethod
     def is_configured(self) -> bool:
         """True when credentials are present. Never raises, never logs a key."""

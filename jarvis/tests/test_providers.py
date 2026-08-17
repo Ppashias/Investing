@@ -175,3 +175,80 @@ def test_registry_reports_configured_only(stub: StubProvider) -> None:
     registry.register(StubProvider(configured=False))
     assert len(registry.all()) == 1  # same key overwrites
     assert registry.has_any_configured() is False  # last registration wins
+
+
+# ── routing constraints (Phase D, item 11) ───────────────────────────────────
+#
+# Capabilities answer "can this provider do the work". Constraints answer
+# "should it". Only one of them refuses: routing to a costlier model is a worse
+# outcome than not answering, and sending private text to a vendor is not.
+
+
+def _providers():
+    from jarvis.providers.openai_compat import OpenAICompatProvider
+    from jarvis.secrets import Secret
+
+    local = OpenAICompatProvider(api_key=Secret("x"), key="ollama",
+                                 base_url="http://127.0.0.1:11434/v1")
+    remote = OpenAICompatProvider(api_key=Secret("x"), key="openai",
+                                  base_url="https://api.openai.com/v1")
+    return local, remote
+
+
+def test_a_provider_is_remote_until_it_says_otherwise() -> None:
+    """The safe default. A wrong True sends private text to a vendor; a wrong
+    False costs an honest refusal."""
+    from jarvis.providers.base import AIProvider
+
+    assert AIProvider.runs_locally.fget(object()) is False
+
+
+def test_locality_is_parsed_from_the_url_not_configured() -> None:
+    """One class fronts Ollama, llama.cpp, LM Studio, vLLM *and* OpenAI — the
+    difference is the URL and nothing else, so the host is the only thing that
+    can answer whether text leaves the machine.
+
+    An operator-set boolean would be a claim nobody checks.
+    """
+    local, remote = _providers()
+    assert local.runs_locally is True
+    assert remote.runs_locally is False
+
+
+def test_a_private_call_refuses_rather_than_falling_back(core) -> None:
+    """The whole point of asking is that the remote answer is unacceptable, so
+    a silent downgrade would defeat it."""
+    from jarvis.errors import NoEligibleProviderError
+    from jarvis.providers.router import RoutingConstraints, TaskClass
+
+    with pytest.raises(NoEligibleProviderError):
+        core.router.select(
+            TaskClass.CONVERSATION,
+            constraints=RoutingConstraints(must_stay_local=True),
+        )
+
+
+def test_an_absent_constraint_changes_nothing(core) -> None:
+    """The ordinary path must not change shape because constraints now exist."""
+    from jarvis.providers.router import RoutingConstraints, TaskClass
+
+    plain = core.router.select(TaskClass.CONVERSATION)
+    empty = core.router.select(TaskClass.CONVERSATION,
+                               constraints=RoutingConstraints())
+    assert plain.provider.key == empty.provider.key
+
+
+def test_an_unpriced_provider_does_not_count_as_cheap() -> None:
+    """0.0 is ModelInfo's "not priced" default, not a free model.
+
+    Guessing cheap about a provider that never said is how a "prefer cheap"
+    flag produces a bill.
+    """
+    from jarvis.providers.router import ModelRouter
+
+    local, remote = _providers()
+    router = ModelRouter.__new__(ModelRouter)
+    # Local is free at the margin, so it sorts first — which is also the
+    # privacy-preferring order.
+    assert router._cost_of(local) == 0.0
+    assert router._cost_of(remote) == float("inf")

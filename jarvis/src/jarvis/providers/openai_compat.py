@@ -112,6 +112,28 @@ class OpenAICompatProvider(AIProvider):
     def default_model(self) -> str:
         return self._default_model
 
+    @property
+    def runs_locally(self) -> bool:
+        """Loopback and private addresses only.
+
+        This class fronts Ollama, llama.cpp, LM Studio, vLLM *and* OpenAI —
+        the difference is the URL and nothing else — so the host is the only
+        thing that can answer "does this text leave the machine?". Parsed
+        rather than configured, because an operator-set boolean would be a
+        claim nobody checks, and the failure mode of a wrong claim is private
+        text at a vendor.
+        """
+        import ipaddress
+        from urllib.parse import urlparse
+
+        host = (urlparse(self._base_url).hostname or "").strip("[]")
+        if host in {"localhost", "127.0.0.1", "::1"}:
+            return True
+        try:
+            return ipaddress.ip_address(host).is_private
+        except ValueError:
+            return False
+
     def is_configured(self) -> bool:
         if not self._requires_api_key:
             return bool(self._base_url)
