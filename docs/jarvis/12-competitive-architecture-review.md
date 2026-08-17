@@ -418,11 +418,11 @@ Everything below is **NOT STARTED**. Nothing in this document has been built.
 | 9 | Windows UIA backend | **IMPLEMENTED — WINDOWS UNVERIFIED.** 14 tests off-Windows; no input call has ever executed |
 | 10 | Skill system | NOT STARTED |
 | 11 | Model routing | **IMPLEMENTED** — 5 tests. Constraints honoured; no caller passes them yet |
-| 12 | Goals | NOT STARTED |
+| 12 | Goals | **VERIFIED** — 10 tests + 2 tools, no migration (built on the task tree) |
 | 13 | Telemetry | **VERIFIED** — 13 tests, local-only by design, `/api/system/telemetry` |
 | 14 | Voice | NOT STARTED |
 
-Ten of fourteen. Nothing above is called VERIFIED unless a test exercises the
+Eleven of fourteen. Nothing above is called VERIFIED unless a test exercises the
 behaviour it claims — item 6 is IMPLEMENTED rather than VERIFIED because its
 authority model is tested and its integration with a real agent loop is not,
 and item 9 cannot be VERIFIED anywhere but Windows.

@@ -301,3 +301,126 @@ TOOLS = [
 ]
 
 __all__ = ["TOOLS"] + [t.name for t in TOOLS]
+
+
+# ── goals (Phase D, item 12) ─────────────────────────────────────────────────
+#
+# The goal service answers questions and never acts. These tools are how the
+# *answers* reach a turn — and, deliberately, how any resulting action becomes
+# an ordinary tool call subject to the ordinary checks. A goal system that
+# could act on its own schedule would be an autonomous actor with a private
+# execution path, which is the one thing this codebase keeps refusing to build.
+
+
+@tool(
+    name="set_goal",
+    description=(
+        "Record something the user wants to achieve, optionally with steps and "
+        "a deadline. Mark it as a commitment when they have promised it to "
+        "someone — commitments are chased harder than intentions."
+    ),
+    parameters={
+        "type": "object",
+        "properties": {
+            "title": {"type": "string", "minLength": 1},
+            "steps": {"type": "array", "items": {"type": "string"}},
+            "due_at": {
+                "type": "string",
+                "description": "ISO 8601, e.g. 2026-09-01T17:00:00Z.",
+            },
+            "is_commitment": {"type": "boolean"},
+            "description": {"type": "string"},
+        },
+        "required": ["title"],
+        "additionalProperties": False,
+    },
+    capability=Capability.WRITE,
+    risk_level=RiskLevel.LOW,
+    category="agents",
+)
+async def set_goal(
+    *,
+    ctx: ToolContext,
+    title: str,
+    steps: list[str] | None = None,
+    due_at: str | None = None,
+    is_commitment: bool = False,
+    description: str | None = None,
+) -> ToolResult:
+    from datetime import datetime
+
+    from jarvis.goals.service import GoalService
+
+    when = None
+    if due_at:
+        try:
+            when = datetime.fromisoformat(due_at.replace("Z", "+00:00"))
+        except ValueError:
+            # Refused rather than silently dropped: a goal that quietly loses
+            # its deadline is one nothing will ever chase, and the model would
+            # have no way to know.
+            return ToolResult.error(
+                f"I could not read {due_at!r} as a date. Use ISO 8601, like "
+                "2026-09-01T17:00:00Z.",
+                created=False,
+            )
+
+    goal = await GoalService(ctx.session).create_goal(
+        ctx.user_id, title=title, steps=steps, due_at=when,
+        is_commitment=is_commitment, description=description,
+    )
+    return ToolResult.ok(
+        f"Recorded {'commitment' if is_commitment else 'goal'}: {goal.title}"
+        + (f" ({len(steps)} steps)" if steps else "")
+        + (f", due {when.isoformat()}" if when else "") + ".",
+        goal_id=goal.id, steps=len(steps or []), is_commitment=is_commitment,
+    )
+
+
+@tool(
+    name="review_goals",
+    description=(
+        "Show what the user is working towards, how far along each is, and "
+        "anything overdue, due soon, or gone quiet. Use this when they ask "
+        "what they should be doing, or at the start of a working session."
+    ),
+    parameters={"type": "object", "properties": {}, "additionalProperties": False},
+    capability=Capability.READ,
+    category="agents",
+)
+async def review_goals(*, ctx: ToolContext) -> ToolResult:
+    from jarvis.goals.service import GoalService
+
+    service = GoalService(ctx.session)
+    goals = await service.goals(ctx.user_id)
+    follow_ups = await service.follow_ups(ctx.user_id)
+
+    if not goals and not follow_ups:
+        return ToolResult.ok("No goals recorded, and nothing needs chasing.",
+                             goals=[], follow_ups=[])
+
+    lines: list[str] = []
+    if goals:
+        lines.append("Goals:")
+        for goal in goals:
+            done = f"{goal.completed}/{goal.total}"
+            lines.append(
+                f"- {goal.title} — {done} steps"
+                + (" — OVERDUE" if goal.overdue else "")
+            )
+    if follow_ups:
+        lines.append("")
+        lines.append("Worth raising:")
+        for item in follow_ups:
+            mark = "promise" if item.is_commitment else "intention"
+            lines.append(f"- {item.title} ({item.reason}, {mark})")
+
+    return ToolResult.ok(
+        "\n".join(lines),
+        goals=[g.describe() for g in goals],
+        follow_ups=[f.describe() for f in follow_ups],
+    )
+
+
+TOOLS = TOOLS + [set_goal, review_goals]
+__all__ = ["TOOLS"] + [t.name for t in TOOLS]

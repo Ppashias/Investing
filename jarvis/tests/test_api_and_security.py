@@ -31,7 +31,7 @@ def test_health_is_public_and_minimal(client: TestClient) -> None:
 
 def test_system_status_lists_tools_and_providers(client: TestClient) -> None:
     body = client.get("/api/system/status").json()
-    assert body["tools"]["count"] == 43
+    assert body["tools"]["count"] == 45
     assert body["providers"][0]["key"] == "stub"
 
 

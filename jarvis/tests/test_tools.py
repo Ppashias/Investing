@@ -53,7 +53,7 @@ def test_default_registry_has_expected_tools() -> None:
         "list_directory", "run_command", "computer_status",
         # Phase D
         "spawn_agent", "start_background_task", "background_status",
-        "cancel_background_task",
+        "cancel_background_task", "set_goal", "review_goals",
     }
 
 
