@@ -216,11 +216,11 @@ class BrowserService:
         *,
         activity_bus: Any = None,
     ) -> None:
-        self.settings = settings or BrowserSettings()
+        self._settings = settings or BrowserSettings()
         self.activity_bus = activity_bus
 
         self.capabilities = BrowserCapabilityReport()
-        if not self.settings.enabled:
+        if not self._settings.enabled:
             # Knowable without probing, and worth knowing before anyone asks:
             # the status endpoint should say "switched off" immediately rather
             # than "not probed yet".
@@ -309,6 +309,33 @@ class BrowserService:
         }
 
     # ── capability ───────────────────────────────────────────────────────────
+
+    @property
+    def settings(self) -> BrowserSettings:
+        return self._settings
+
+    @settings.setter
+    def settings(self, value: BrowserSettings) -> None:
+        """Replacing the settings discards the capability answer they produced.
+
+        The report is a conclusion *about* a particular configuration — which
+        executable, whether it is enabled at all — so keeping it across a
+        settings change means answering a question nobody asked with an answer
+        to a different one.
+
+        Latent until the core began probing at startup, because until then the
+        first probe happened lazily, after any reconfiguration. It surfaced as
+        the whole browser suite failing with "the browser is not available":
+        the probe had run against the default settings and cached a refusal
+        that the tests' own configuration could no longer clear.
+        """
+        self._settings = value
+        self.capabilities = BrowserCapabilityReport()
+        if not value.enabled:
+            self.capabilities.state = BrowserAvailability.DISABLED
+            self.capabilities.reason = (
+                "Browser control is switched off (JARVIS_BROWSER_ENABLED=false)."
+            )
 
     async def detect(self, *, refresh: bool = False) -> BrowserCapabilityReport:
         """Probe once and remember the answer.

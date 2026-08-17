@@ -275,10 +275,114 @@ class JarvisCore:
             log.info("default_user_created", user_id=user.id)
         return user
 
+    def subsystems(self) -> list[dict[str, object]]:
+        """What is actually usable right now, and why anything is not.
+
+        Replaces a hardcoded "NOT IMPLEMENTED" list in the console that had
+        gone comprehensively stale: it still named memory, file access,
+        computer control, browser control and agents as unbuilt, months after
+        each shipped. A UI telling somebody a feature is missing when they have
+        it is worse than saying nothing — they will not go looking for it.
+
+        The lesson from that is not "correct the list". It is that a
+        second, hand-written statement of what exists will always drift from
+        the thing it describes. So this is computed from the same objects the
+        subsystems themselves consult, and the console renders whatever it
+        returns.
+
+        The distinction it draws is the one the stale list could not: *built*
+        and *available here* are different questions. Browser control is built;
+        it is unavailable without Playwright installed. Saying "unavailable —
+        pip install jarvis[browser]" is useful, and "not implemented" is false.
+
+        There are three states rather than two, and the third is load-bearing.
+        The browser is probed lazily — the probe starts a Playwright driver
+        process, and paying for that on every start would be a real cost for a
+        capability most turns never use. Until something asks, the honest
+        answer is ``unknown``, not ``unavailable``: reporting a refusal for
+        something nobody has looked at is the same overclaim as the stale list,
+        pointed the other way.
+        """
+        computer_reason = None
+        if not self.computer.settings.enabled:
+            computer_reason = "Switched off (JARVIS_COMPUTER_ENABLED)."
+        elif not self.computer.capabilities.display:
+            from jarvis.computer.types import ActionKind
+
+            computer_reason = self.computer.capabilities.reason_unavailable(
+                ActionKind.CLICK
+            )
+
+        from jarvis.browser.capabilities import BrowserAvailability
+
+        browser = self.browser.capabilities
+        if browser.available:
+            browser_state, browser_detail = "ready", None
+        elif browser.state is BrowserAvailability.UNPROBED:
+            browser_state = "unknown"
+            browser_detail = "Not checked yet — probed the first time it is used."
+        else:
+            browser_state, browser_detail = "unavailable", browser.reason
+
+        embeddings = self.embeddings.info
+        configured = bool(self.providers.configured())
+        vault = self.settings.obsidian_vault_path
+
+        return [
+            {
+                "name": "Conversation",
+                "state": "ready" if configured else "unavailable",
+                "detail": None if configured else
+                          "No AI provider is configured. Set ANTHROPIC_API_KEY.",
+            },
+            {
+                "name": "Tasks & tools",
+                "state": "ready",
+                "detail": f"{len(self.tools.all())} tools registered.",
+            },
+            {
+                "name": "Memory",
+                # Ready either way — the caveat is about the *quality* of
+                # recall, not whether it works. Reporting it unavailable
+                # because embeddings are absent would hide a subsystem the user
+                # can use today, which is the same overclaim in reverse.
+                "state": "ready",
+                "detail": None if embeddings.semantic else
+                          "Search is lexical: it matches wording, not meaning.",
+            },
+            {
+                "name": "Knowledge base",
+                "state": "ready",
+                "detail": None if self.settings.knowledge_roots else
+                          "Uploads only — no directories approved for ingestion.",
+            },
+            {
+                "name": "Obsidian",
+                "state": "ready" if vault else "unavailable",
+                "detail": None if vault else "No vault connected.",
+            },
+            {
+                "name": "Computer control",
+                "state": "ready" if computer_reason is None else "unavailable",
+                "detail": computer_reason,
+            },
+            {
+                "name": "Browser control",
+                "state": browser_state,
+                "detail": browser_detail,
+            },
+            {
+                "name": "Agents & background work",
+                "state": "ready",
+                "detail": f"{len(self.background.active)} running.",
+            },
+        ]
+
     def status(self) -> dict[str, object]:
         return {
             "status": "ok",
             "phase": 1,
+            "subsystems": self.subsystems(),
             "settings": self.settings.public_dict(),
             "providers": self.providers.describe(),
             "tools": {

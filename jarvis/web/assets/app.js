@@ -700,15 +700,29 @@
         el.systemInfo.appendChild(kv);
       });
 
-      el.systemInfo.appendChild(node("h4", null, "NOT IMPLEMENTED"));
-      [
-        "Memory & semantic search (Phase 2)",
-        "File access (Phase 3)",
-        "Computer control (Phase 4)",
-        "Browser control (Phase 5)",
-        "Specialised agents (Phase 6)",
-      ].forEach((item) => {
-        el.systemInfo.appendChild(node("div", "dim", "· " + item));
+      /* Rendered from what the server reports, never from a list written
+         here. The list this replaced was hand-written and had gone
+         comprehensively stale — it still named memory, file access, computer
+         control, browser control and agents as unbuilt, months after each
+         shipped. Telling somebody a feature is missing when they have it is
+         worse than saying nothing: they stop looking for it. */
+      el.systemInfo.appendChild(node("h4", null, "SUBSYSTEMS"));
+      (status.subsystems || []).forEach((item) => {
+        const row = node("div", "kv subsystem");
+        row.appendChild(node("span", null, item.name));
+        /* Three states, not two. "unknown" is the browser before anything has
+           asked for it: the probe starts a Playwright driver process, so it is
+           deliberately lazy, and printing "unavailable" for something nobody
+           has looked at would be the same overclaim as the list this replaced,
+           pointed the other way. */
+        row.appendChild(node("span", "sub-" + item.state, item.state));
+        el.systemInfo.appendChild(row);
+        /* The reason, when there is one. This is the half the old list could
+           not express: "built but not available here" is a different fact from
+           "not built", and it is the one with a remedy attached. */
+        if (item.detail) {
+          el.systemInfo.appendChild(node("div", "sub-detail", item.detail));
+        }
       });
     } catch (_) { /* ignore */ }
   }

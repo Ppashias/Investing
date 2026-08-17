@@ -1017,3 +1017,46 @@ def test_an_authorisation_exposes_all_three_outcomes() -> None:
             "denied": auth.denied,
         }
         assert [k for k, v in flags.items() if v] == list(expected)
+
+
+def test_replacing_the_settings_discards_the_capability_answer() -> None:
+    """A capability report is a conclusion *about* a configuration.
+
+    Keeping it across a settings change answers a question nobody asked with
+    the answer to a different one. Latent until the core began probing at
+    startup: before that the first probe happened lazily, after any
+    reconfiguration. It surfaced as the entire browser suite failing with "the
+    browser is not available" — a refusal cached against default settings that
+    the tests' own configuration could no longer clear.
+    """
+    from dataclasses import replace
+
+    from jarvis.browser import BrowserService, BrowserSettings
+    from jarvis.browser.capabilities import BrowserAvailability
+
+    service = BrowserService(BrowserSettings(enabled=False))
+    assert service.capabilities.state is BrowserAvailability.DISABLED
+
+    service.settings = replace(service.settings, enabled=True)
+
+    assert service.capabilities.state is BrowserAvailability.UNPROBED, \
+        "a stale refusal survived the reconfiguration"
+    # UNPROBED carries its own wording — "nobody has looked yet" is a state
+    # worth naming, and it must not be the previous configuration's refusal.
+    assert "switched off" not in service.capabilities.reason
+
+
+def test_disabling_by_settings_is_known_without_probing() -> None:
+    """The other direction, which must keep working: "switched off" is knowable
+    from configuration alone, and the status endpoint should say so rather than
+    "not probed yet"."""
+    from dataclasses import replace
+
+    from jarvis.browser import BrowserService, BrowserSettings
+    from jarvis.browser.capabilities import BrowserAvailability
+
+    service = BrowserService(BrowserSettings(enabled=True))
+    service.settings = replace(service.settings, enabled=False)
+
+    assert service.capabilities.state is BrowserAvailability.DISABLED
+    assert "switched off" in service.capabilities.reason

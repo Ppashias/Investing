@@ -576,3 +576,114 @@ def test_seeding_approvals_does_not_carry_the_pending_arguments(
     assert seeder is not None, "refreshApprovals moved"
     for forbidden in ("row.arguments", "row.body", ".arguments", ".body"):
         assert forbidden not in seeder.group(1), forbidden
+
+
+# ── the console does not claim features are missing that exist ───────────────
+
+
+def test_the_console_holds_no_hardcoded_list_of_what_exists(
+    client: TestClient
+) -> None:
+    """The defect this replaced, pinned so it cannot come back.
+
+    app.js carried a hand-written "NOT IMPLEMENTED" list naming memory, file
+    access, computer control, browser control and agents — months after each
+    of them shipped. A UI telling somebody a feature is missing when they have
+    it is worse than saying nothing: they stop looking for it.
+
+    The lesson is not "correct the list". A second, hand-written statement of
+    what exists will always drift from the thing it describes, so the fix is
+    that the console has no opinion of its own and renders what the server
+    computes.
+    """
+    code = _console_code_for(client, "app.js")
+
+    assert "NOT IMPLEMENTED" not in code
+    for stale in ("Phase 2)", "Phase 3)", "Phase 4)", "Phase 5)", "Phase 6)"):
+        assert stale not in code, f"a hardcoded roadmap entry survived: {stale}"
+    # …and it reads the derived block instead.
+    assert "status.subsystems" in code
+
+
+def test_the_empty_conversation_does_not_disclaim_working_features(
+    client: TestClient
+) -> None:
+    """The same claim in the other place it was made — the empty chat state,
+    which is the first sentence a new user reads."""
+    page = client.get("/").text
+
+    assert "not built yet" not in page
+    assert "Phase 1:" not in page
+
+
+async def test_every_subsystem_reports_available_or_says_why(client) -> None:
+    """An entry marked unavailable with no reason is a dead end, and one marked
+    available that is not is the overclaim this whole layer exists to avoid."""
+    subsystems = client.get("/api/system/status").json()["subsystems"]
+
+    assert subsystems, "nothing reported at all"
+    for entry in subsystems:
+        assert set(entry) == {"name", "state", "detail"}
+        assert entry["state"] in {"ready", "unavailable", "unknown"}
+        if entry["state"] != "ready":
+            assert entry["detail"], f"{entry['name']} is {entry['state']} with no reason"
+
+
+async def test_a_built_but_unavailable_subsystem_is_not_called_unbuilt(
+    client, core
+) -> None:
+    """The distinction the old list could not express.
+
+    Browser control is built; it is unavailable without Playwright's Chromium.
+    "Unavailable — run playwright install chromium" is useful. "Not
+    implemented (Phase 5)" is false, and sends the reader somewhere that does
+    not exist.
+    """
+    entry = next(
+        s for s in core.subsystems() if s["name"] == "Browser control"
+    )
+
+    if entry["state"] == "ready":
+        pytest.skip("a browser is available here, so there is no reason to check")
+    detail = entry["detail"]
+    assert "not implemented" not in detail.lower()
+    assert "Phase" not in detail
+
+
+async def test_memory_is_available_even_when_search_is_only_lexical(core) -> None:
+    """The caveat is about the *quality* of recall, not whether it works.
+
+    Reporting memory as unavailable because embeddings are absent would be the
+    same overclaim in the opposite direction — and would hide a subsystem the
+    user can use today.
+    """
+    entry = next(s for s in core.subsystems() if s["name"] == "Memory")
+
+    assert entry["state"] == "ready"
+    if not core.embeddings.info.semantic:
+        assert "lexical" in entry["detail"]
+
+
+async def test_an_unprobed_browser_is_reported_as_unknown_not_unavailable(
+    core,
+) -> None:
+    """The third state, and why it exists.
+
+    Probing starts a Playwright driver process, so it stays lazy — paying for
+    that on every start would be a real cost for a capability most turns never
+    use, and there is a test asserting startup launches nothing. Given that, a
+    panel reading "unavailable" for something nobody has looked at would be the
+    same overclaim as the stale list, pointed the other way.
+
+    I got this wrong first: I made startup probe eagerly so the panel would
+    read cleanly, which broke the no-launch guarantee. The state is the fix,
+    not the probe.
+    """
+    from jarvis.browser.capabilities import BrowserAvailability
+
+    if core.browser.capabilities.state is not BrowserAvailability.UNPROBED:
+        pytest.skip("something in this fixture already probed")
+
+    entry = next(s for s in core.subsystems() if s["name"] == "Browser control")
+    assert entry["state"] == "unknown"
+    assert "Not checked yet" in entry["detail"]

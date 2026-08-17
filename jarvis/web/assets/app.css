@@ -731,3 +731,19 @@ input:focus,select:focus{outline:none; border-color:var(--accent-soft)}
    palette — set both so the open list is not black-on-black or white-on-white
    depending on the platform. */
 .model-select option{background:var(--card); color:var(--text)}
+
+/* ── subsystem readiness ────────────────────────────────────────────────── */
+/* Green/amber would put the whole meaning in colour. The words "ready" and
+   "unavailable" carry it, and the colour only reinforces — same reasoning as
+   the memory trust tags. */
+.subsystem{margin-top:2px}
+.sub-ready{color:var(--accent)}
+.sub-unavailable{color:var(--gold)}
+/* Neither claim: nobody has looked yet. Dim rather than gold, so it does not
+   read as a problem to go and fix. */
+.sub-unknown{color:var(--dim)}
+.sub-detail{
+  font-size:10px; line-height:1.5; color:var(--dim);
+  margin:0 0 6px 10px; padding-left:8px;
+  border-left:1px solid var(--border);
+}
