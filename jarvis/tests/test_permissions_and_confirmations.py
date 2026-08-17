@@ -525,3 +525,209 @@ def test_the_executor_appends_the_impact_sentence() -> None:
         Tool("t", "d", {}, _noop, reversible=False), "Do the thing."
     )
     assert "cannot be undone" in body
+
+
+# ── context rules: when a grant applies at all (Phase D, item 5) ─────────────
+#
+# `vierisid/jarvis` models these as a separate "context rules" list evaluated
+# alongside its authority levels. Ours live on the grant, because a separate
+# list is a second policy surface and the whole argument of this engine is that
+# there is one place to look up what a user is allowed to do. A grant that does
+# not apply right now is simply not a candidate, so most-specific-wins and
+# DENY-breaks-ties keep working untouched.
+
+
+def _at(hour: int, minute: int = 0):
+    """Freeze the engine's idea of local wall-clock time."""
+    from datetime import datetime as _dt
+    from unittest.mock import patch
+
+    import jarvis.permissions.engine as engine
+
+    class _Frozen(_dt):
+        @classmethod
+        def now(cls, tz=None):
+            if tz is not None:
+                return _dt.now(tz)
+            return _dt(2026, 8, 17, hour, minute)
+
+    return patch.object(engine, "datetime", _Frozen)
+
+
+async def _ask(session, user, capability=Capability.EXTERNAL_ACTION,
+               tool="browser_open"):
+    return await PermissionEngine(session).evaluate(
+        PermissionRequest(
+            user_id=user.id, capability=capability, resource=f"tool:{tool}",
+            tool_name=tool,
+        )
+    )
+
+
+async def test_a_grant_outside_its_window_does_not_apply(session, user) -> None:
+    """"Let JARVIS browse during working hours" — and only then."""
+    session.add(
+        PermissionGrant(
+            user_id=user.id, capability=Capability.EXTERNAL_ACTION,
+            resource_scope="tool:browser_open", mode=PermissionMode.ALLOW,
+            conditions={"active_between": {"from": "09:00", "to": "18:00"}},
+            note="working hours only",
+        )
+    )
+    await session.flush()
+
+    with _at(11):
+        assert (await _ask(session, user)).mode is PermissionMode.ALLOW
+    with _at(20):
+        # Falls through to the default, which asks. Fails safe rather than open.
+        assert (await _ask(session, user)).mode is PermissionMode.ASK
+
+
+async def test_a_window_can_wrap_past_midnight(session, user) -> None:
+    """22:00 → 06:00 is two intervals, not none.
+
+    The wrapping case is the one people actually want — "nothing external
+    overnight" — so getting it wrong would make the feature useless for its
+    main use.
+    """
+    session.add(
+        PermissionGrant(
+            user_id=user.id, capability=Capability.EXTERNAL_ACTION,
+            resource_scope="*", mode=PermissionMode.DENY,
+            conditions={"active_between": {"from": "22:00", "to": "06:00"}},
+            note="no external actions overnight",
+        )
+    )
+    await session.flush()
+
+    for hour in (23, 2, 5):
+        with _at(hour):
+            assert (await _ask(session, user)).mode is PermissionMode.DENY, hour
+    for hour in (7, 12, 21):
+        with _at(hour):
+            assert (await _ask(session, user)).mode is not PermissionMode.DENY, hour
+
+
+async def test_the_window_boundary_belongs_to_one_side_only(session, user) -> None:
+    """Inclusive of ``from``, exclusive of ``to``, so two adjacent windows do
+    not both claim the boundary minute."""
+    session.add(
+        PermissionGrant(
+            user_id=user.id, capability=Capability.EXTERNAL_ACTION,
+            resource_scope="*", mode=PermissionMode.ALLOW,
+            conditions={"active_between": {"from": "09:00", "to": "18:00"}},
+        )
+    )
+    await session.flush()
+
+    with _at(9, 0):
+        assert (await _ask(session, user)).mode is PermissionMode.ALLOW
+    with _at(18, 0):
+        assert (await _ask(session, user)).mode is PermissionMode.ASK
+
+
+async def test_a_malformed_window_does_not_grant_anything(session, user) -> None:
+    """A typo must not silently grant permission around the clock."""
+    session.add(
+        PermissionGrant(
+            user_id=user.id, capability=Capability.EXTERNAL_ACTION,
+            resource_scope="*", mode=PermissionMode.ALLOW,
+            conditions={"active_between": {"from": "9am", "to": "6pm"}},
+        )
+    )
+    await session.flush()
+
+    with _at(11):
+        assert (await _ask(session, user)).mode is PermissionMode.ASK
+
+
+async def test_a_grant_can_be_restricted_to_named_tools(session, user) -> None:
+    session.add(
+        PermissionGrant(
+            user_id=user.id, capability=Capability.EXTERNAL_ACTION,
+            resource_scope="*", mode=PermissionMode.ALLOW,
+            conditions={"tools": ["browser_open"]},
+        )
+    )
+    await session.flush()
+
+    assert (await _ask(session, user, tool="browser_open")).mode is PermissionMode.ALLOW
+    assert (await _ask(session, user, tool="browser_click")).mode is PermissionMode.ASK
+
+
+async def test_a_rule_can_apply_only_to_a_poisoned_turn(session, user) -> None:
+    """"Nothing that touched a web page may do this", said once.
+
+    Expressible as a single DENY rather than per tool, which is the difference
+    between a policy someone maintains and one they give up on.
+    """
+    # Scoped to the same specificity as the seeded ALLOW for this tool, so
+    # this also shows DENY-breaks-ties still working once the condition holds.
+    session.add(
+        PermissionGrant(
+            user_id=user.id, capability=Capability.WRITE,
+            resource_scope="tool:create_task", mode=PermissionMode.DENY,
+            conditions={"when_tainted": True},
+        )
+    )
+    await session.flush()
+
+    engine = PermissionEngine(session)
+    clean = await engine.evaluate(
+        PermissionRequest(user_id=user.id, capability=Capability.WRITE,
+                          resource="tool:create_task", tool_name="create_task")
+    )
+    assert clean.mode is not PermissionMode.DENY
+
+    poisoned = await engine.evaluate(
+        PermissionRequest(user_id=user.id, capability=Capability.WRITE,
+                          resource="tool:create_task", tool_name="create_task",
+                          tainted=True)
+    )
+    assert poisoned.mode is PermissionMode.DENY
+
+
+async def test_conditions_do_not_disturb_specificity_or_deny_ties(
+    session, user
+) -> None:
+    """The existing rules keep working, because a non-applying grant is simply
+    not a candidate rather than a special case inside the sort."""
+    session.add_all([
+        PermissionGrant(
+            user_id=user.id, capability=Capability.EXTERNAL_ACTION,
+            resource_scope="*", mode=PermissionMode.ALLOW,
+        ),
+        PermissionGrant(
+            user_id=user.id, capability=Capability.EXTERNAL_ACTION,
+            resource_scope="tool:browser_open", mode=PermissionMode.DENY,
+            conditions={"active_between": {"from": "22:00", "to": "06:00"}},
+        ),
+    ])
+    await session.flush()
+
+    with _at(23):
+        # The specific, currently-applying DENY wins.
+        assert (await _ask(session, user)).mode is PermissionMode.DENY
+    with _at(12):
+        # Outside its window it is not a candidate, so the broad ALLOW stands.
+        assert (await _ask(session, user)).mode is PermissionMode.ALLOW
+
+
+async def test_an_unknown_condition_key_is_ignored(session, user) -> None:
+    """Operator data outliving a rename must not silently revoke permissions.
+
+    The asymmetry is deliberate and worth knowing: ignoring an unknown
+    *restriction* widens rather than narrows, so anything added to this
+    vocabulary has to be additive, never a rename.
+    """
+    session.add(
+        PermissionGrant(
+            user_id=user.id, capability=Capability.EXTERNAL_ACTION,
+            resource_scope="*", mode=PermissionMode.ALLOW,
+            conditions={"only_on_tuesdays": True},
+        )
+    )
+    await session.flush()
+
+    with _at(11):
+        assert (await _ask(session, user)).mode is PermissionMode.ALLOW

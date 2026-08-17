@@ -27,7 +27,7 @@ from __future__ import annotations
 
 import fnmatch
 from dataclasses import dataclass, field
-from datetime import datetime, timezone
+from datetime import datetime, time, timezone
 
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -292,8 +292,11 @@ class PermissionEngine:
                     expires = expires.replace(tzinfo=timezone.utc)
                 if expires <= now:
                     continue
-            if fnmatch.fnmatch(request.resource, grant.resource_scope):
-                candidates.append(grant)
+            if not fnmatch.fnmatch(request.resource, grant.resource_scope):
+                continue
+            if not _context_matches(grant, request):
+                continue
+            candidates.append(grant)
 
         if not candidates:
             return None
@@ -308,6 +311,78 @@ class PermissionEngine:
             reverse=True,
         )
         return candidates[0]
+
+
+#: Conditions that decide *whether a grant applies at all*, as opposed to
+#: ``max_risk``, which decides what it grants once it does.
+#:
+#: `vierisid/jarvis` models these as a separate "context rules" list evaluated
+#: alongside its authority levels. Ours live on the grant instead, for one
+#: reason worth stating: a separate list is a second policy surface, and the
+#: whole argument of this engine is that there is exactly one place to look up
+#: "what is this user allowed to do". A grant that does not apply right now is
+#: simply not a candidate, so most-specific-wins and DENY-breaks-ties keep
+#: working unchanged.
+#:
+#: Supported keys, all optional:
+#:
+#: ``active_between``  ``{"from": "09:00", "to": "18:00"}`` — local wall-clock,
+#:   because "after 22:00" means the operator's evening and not UTC's. A window
+#:   whose ``to`` is earlier than its ``from`` wraps past midnight, which is the
+#:   case people actually want ("no external actions between 22:00 and 06:00").
+#: ``tools``  ``["browser_open", …]`` — restrict to these tool names.
+#: ``when_tainted``  ``true``/``false`` — apply only on a turn that has (or has
+#:   not) read untrusted content. A DENY with ``true`` is "nothing that touched
+#:   a web page may do this", expressed once rather than per tool.
+#:
+#: An unrecognised key is ignored rather than failing the grant. Operator data
+#: outliving a rename must not silently revoke permissions — but note the
+#: asymmetry: ignoring an unknown *restriction* widens rather than narrows, so
+#: anything added here has to be additive to the key set, never a rename.
+
+
+def _in_window(now: datetime, spec: Any) -> bool:
+    """Is the local wall clock inside ``{"from": "HH:MM", "to": "HH:MM"}``?
+
+    Inclusive of ``from``, exclusive of ``to``, so two adjacent windows do not
+    both claim the boundary minute. A malformed spec returns ``False`` — the
+    grant does not apply — because the alternative is a typo silently granting
+    permission around the clock.
+    """
+    if not isinstance(spec, dict):
+        return False
+    try:
+        start = time.fromisoformat(str(spec["from"]))
+        end = time.fromisoformat(str(spec["to"]))
+    except (KeyError, ValueError, TypeError):
+        log.warning("permission_grant_bad_window", spec=str(spec)[:80])
+        return False
+
+    current = now.time()
+    if start <= end:
+        return start <= current < end
+    # Wraps past midnight: 22:00 → 06:00 is two intervals, not none.
+    return current >= start or current < end
+
+
+def _context_matches(grant: PermissionGrant, request: PermissionRequest) -> bool:
+    """Does this grant apply to the situation, before asking what it grants?"""
+    conditions = grant.conditions or {}
+
+    window = conditions.get("active_between")
+    if window is not None and not _in_window(datetime.now(), window):
+        return False
+
+    tools = conditions.get("tools")
+    if tools is not None:
+        if not isinstance(tools, list) or request.tool_name not in tools:
+            return False
+
+    when_tainted = conditions.get("when_tainted")
+    if when_tainted is not None and bool(when_tainted) is not bool(request.tainted):
+        return False
+
+    return True
 
 
 async def seed_default_grants(session: AsyncSession, user_id: str) -> list[PermissionGrant]:
