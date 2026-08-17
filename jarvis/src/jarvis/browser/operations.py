@@ -30,6 +30,7 @@ extracted, and not returned.
 
 from __future__ import annotations
 
+import asyncio
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -146,15 +147,34 @@ async def navigate(
             "policy must be consulted before navigation, not after."
         )
 
+    handle.blocked = None
     try:
-        response = await handle.page.goto(
-            decision.url, timeout=timeout_seconds * 1000, wait_until="domcontentloaded"
-        )
+        response = await _goto(handle, decision.url, timeout_seconds=timeout_seconds)
     except Exception as exc:
+        # The context guard aborts a refused destination before it is
+        # dispatched, and Chromium then reports the navigation as a transport
+        # failure. Without this, a policy refusal would surface as "could not
+        # load" — true, but useless, and indistinguishable from the site being
+        # down. The guard records what it refused; say that instead.
+        blocked = handle.blocked
+        if blocked is not None:
+            # Deliberately left set. It is not only this call's explanation —
+            # it is the record that this page's last navigation was refused,
+            # which is what keeps the page inert until something navigates it
+            # somewhere permitted. Cleared above, at the start of the next
+            # attempt, rather than here.
+            raise RedirectRefused(blocked.reason, blocked.reason) from exc
         raise NavigationFailed(
             f"Could not load {decision.url}: {exc}",
             f"I could not load {decision.url}.",
         ) from exc
+
+    if handle.blocked is not None:
+        # A refusal normally makes ``goto`` raise, so this is the belt to that
+        # brace: a navigation reported as succeeding while the guard was
+        # refusing part of it must not come back as a success. Reporting the
+        # page as loaded here is the one outcome worth ruling out twice.
+        raise RedirectRefused(handle.blocked.reason, handle.blocked.reason)
 
     final_url = handle.page.url
     redirected = _differs(final_url, decision.url)
@@ -171,6 +191,51 @@ async def navigate(
         status=getattr(response, "status", None),
         redirected=redirected,
     )
+
+
+#: How long to keep re-issuing a navigation that a superseding one interrupted,
+#: and how long to wait between attempts. Small: the thing being waited for is
+#: a page commit that has already started.
+_SUPERSEDED_BUDGET_SECONDS = 1.0
+_SUPERSEDED_PAUSE_SECONDS = 0.05
+
+
+async def _goto(handle: PageHandle, url: str, *, timeout_seconds: float) -> Any:
+    """``page.goto``, retried while an in-flight navigation keeps superseding it.
+
+    Needed because a refused navigation is *aborted*, and Chromium responds by
+    committing its own error page. That commit is itself a navigation, so a
+    request to leave the refused page — the documented way to recover one —
+    arrives while it is still in progress and is rejected with "interrupted by
+    another navigation". Measured at 8 failures in 12 attempts, so this is the
+    ordinary path rather than a rare race.
+
+    Waiting for a load state does not help: the *previous* page is already
+    loaded, so the wait returns immediately. What has to be waited on is the
+    error page taking over, which has no event this layer can name.
+
+    Retrying is safe by construction. Every attempt is a fresh request through
+    the context guard, so no attempt escapes the policy; and an attempt refused
+    by the guard sets ``handle.blocked``, which stops the loop rather than
+    re-issuing anything.
+    """
+    loop = asyncio.get_running_loop()
+    deadline = loop.time() + _SUPERSEDED_BUDGET_SECONDS
+    while True:
+        try:
+            return await handle.page.goto(
+                url, timeout=timeout_seconds * 1000, wait_until="domcontentloaded"
+            )
+        except Exception as exc:
+            superseded = "interrupted by another navigation" in str(exc)
+            if (
+                not superseded
+                or handle.blocked is not None
+                or loop.time() >= deadline
+            ):
+                raise
+            log.debug("browser_navigation_superseded", url=url)
+            await asyncio.sleep(_SUPERSEDED_PAUSE_SECONDS)
 
 
 def _differs(final: str, requested: str) -> bool:
@@ -245,6 +310,16 @@ async def inspect(
 
                     credential = credential_reason(inspection_from_dom(None))
 
+            href = ""
+            if role == "link":
+                # Where it goes, so the human approving a click can be told.
+                # Best effort: a link whose target cannot be read is still a
+                # link, and the confirmation simply says less about it.
+                try:
+                    href = (await item.get_attribute("href")) or ""
+                except Exception:  # pragma: no cover - element vanished
+                    href = ""
+
             description = f"the {role}" + (f" “{name}”" if name else "")
             ref = registry.register(
                 page_id=handle.page_id,
@@ -252,6 +327,7 @@ async def inspect(
                 description=description,
                 role=role,
                 name=name,
+                href=href,
             )
             elements.append(
                 InspectedElement(

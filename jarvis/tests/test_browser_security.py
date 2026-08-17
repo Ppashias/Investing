@@ -714,12 +714,44 @@ def test_nothing_in_the_subsystem_navigates_yet() -> None:
     the entire SSRF boundary — so the absence of any navigation call is pinned
     now, and adding one has to come with a deliberate decision about where the
     policy check goes.
+
+    Step 12 made exactly that decision for ``route(``, and the exception is
+    narrow rather than a deletion: ``service`` may register request routing,
+    and ``test_the_only_routing_in_the_subsystem_is_the_navigation_guard``
+    below pins what it is allowed to register. Everything else — and every
+    other module — is unchanged.
     """
     for name in ("settings", "service", "capabilities", "policy", "elements", "urls"):
         source = code_of(browser_module(name))
-        for forbidden in (".goto(", "page.goto", "set_content(", "route(",
-                          "request.get(", "expose_function("):
-            assert forbidden not in source, f"{forbidden} in {name}"
+        forbidden = [".goto(", "page.goto", "set_content(", "request.get(",
+                     "expose_function("]
+        if name != "service":
+            forbidden.append("route(")
+        for token in forbidden:
+            assert token not in source, f"{token} in {name}"
+
+
+def test_the_only_routing_in_the_subsystem_is_the_navigation_guard() -> None:
+    """What ``service`` is allowed to do with the exception it was granted.
+
+    A route handler decides whether every request in the context is dispatched,
+    so a second one — or the same one pointed at a different function — is the
+    whole SSRF boundary re-decided somewhere nobody is looking. Pinned by
+    source, because "there is only one" is not something a runtime test can
+    observe.
+    """
+    import re
+
+    source = code_of(browser_module("service"))
+    registrations = re.findall(r"\.route\(([^)]*)\)", source)
+    assert registrations == ["'**/*', self._guard_navigation"], registrations
+    # And the ways a routed request can end are countable. Two aborts (the
+    # single refusal path, and the fail-closed one), one pass-through for
+    # sub-resources, one fetch-and-fulfill for documents.
+    assert source.count("route.abort(") == 2
+    assert source.count("route.continue_(") == 1
+    assert source.count("route.fetch(") == 1
+    assert source.count("route.fulfill(") == 1
 
 
 # ── 4E: credentials ──────────────────────────────────────────────────────────

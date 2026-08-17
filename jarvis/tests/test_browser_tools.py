@@ -25,7 +25,9 @@ from __future__ import annotations
 import asyncio
 import threading
 from dataclasses import replace
+from html import escape
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from urllib.parse import parse_qs, quote, urlparse
 
 import pytest
 from sqlalchemy import select
@@ -61,6 +63,16 @@ PAGES = {
           <label for="addr">Shipping address</label>
           <input id="addr" name="shipping_address" type="text">
           <button id="go" type="button">Run search</button>
+        </form>
+      </body></html>""",
+    # A real form submission, because the navigation guard takes every document
+    # request through Playwright's own fetch — which has to preserve the method
+    # and the body, or clicking "submit" would quietly become a GET.
+    "/post-form": b"""<html><body>
+        <h1>Post</h1>
+        <form method="POST" action="/submitted">
+          <input id="w" name="what" type="text" value="a walrus">
+          <button id="send" type="submit">Send it</button>
         </form>
       </body></html>""",
     "/login": b"""<html><body>
@@ -99,11 +111,48 @@ class _Handler(BaseHTTPRequestHandler):
             self.send_header("Location", "/")
             self.end_headers()
             return
+        if path == "/redirect-to":
+            # A permitted-looking page that bounces wherever the test says.
+            self.send_response(302)
+            self.send_header(
+                "Location", parse_qs(urlparse(self.path).query).get("to", [""])[0]
+            )
+            self.end_headers()
+            return
+        if path == "/link":
+            # A page whose only content is a link to wherever the test says.
+            # The lure shape from the Step 11 audit, parameterised: the whole
+            # point is that the *page* chooses the destination, not JARVIS.
+            target = parse_qs(urlparse(self.path).query).get("to", [""])[0]
+            body = (
+                "<html><body><h1>Lure</h1>"
+                f'<a id="go" href="{escape(target, quote=True)}">Continue</a>'
+                "</body></html>"
+            ).encode()
+            self.send_response(200)
+            self.send_header("Content-Type", "text/html; charset=utf-8")
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+            return
         body = PAGES.get(path)
         if body is None:
             self.send_response(404)
             self.end_headers()
             return
+        self.send_response(200)
+        self.send_header("Content-Type", "text/html; charset=utf-8")
+        self.send_header("Content-Length", str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
+
+    #: What the last POST carried, for the form-submission test.
+    posted: list[tuple[str, bytes]] = []
+
+    def do_POST(self) -> None:  # noqa: N802 - BaseHTTPRequestHandler's name
+        length = int(self.headers.get("Content-Length") or 0)
+        _Handler.posted.append((self.path, self.rfile.read(length)))
+        body = b"<html><body><h1>Received</h1></body></html>"
         self.send_response(200)
         self.send_header("Content-Type", "text/html; charset=utf-8")
         self.send_header("Content-Length", str(len(body)))
@@ -1626,3 +1675,500 @@ async def test_the_whole_attack_chain_is_refused_end_to_end(browsing, site) -> N
 
     rows = [(s, op) for s, op, _, _ in await activity_rows(browsing)]
     assert ("REFUSED", "navigate") in rows
+
+
+# ── Step 12: navigation caused by clicking ───────────────────────────────────
+#
+# The Step 11 audit proved that a click could reach a destination ``UrlPolicy``
+# refuses: the tool layer sees "click an element", Chromium sees "navigate", and
+# the policy only ever guarded ``browser_open``/``browser_navigate``. The fix is
+# a context-level request guard, so the tests below are about *causes* of
+# navigation rather than about ``click()``.
+#
+# The load-bearing assertion in each is that the destination server records no
+# request at all. "The response body never reached the model" was already true
+# before the fix and is not what is being proven here.
+
+
+class _Victim(BaseHTTPRequestHandler):
+    """A server on an address the policy refuses, which counts what reaches it."""
+
+    hits: list[str] = []
+
+    def do_GET(self) -> None:  # noqa: N802 - BaseHTTPRequestHandler's name
+        type(self).hits.append(self.path)
+        self.send_response(200)
+        self.send_header("Content-Length", "2")
+        self.end_headers()
+        self.wfile.write(b"hi")
+
+    def log_message(self, *_args) -> None:
+        return
+
+
+@pytest.fixture
+def victim():
+    """An HTTP server on 192.0.2.2 — a private address by ``ipaddress``.
+
+    Its access log is the evidence. Asserting that JARVIS *reported* a refusal
+    would only prove the tool's prose; asserting that this server was never
+    contacted proves the request was never issued, which is the actual claim.
+
+    Skipped rather than faked where the address cannot be bound: a test that
+    silently stopped observing the destination would keep passing after the
+    guard was removed.
+    """
+    _Victim.hits = []
+    try:
+        server = ThreadingHTTPServer(("192.0.2.2", 0), _Victim)
+    except OSError as exc:
+        pytest.skip(f"cannot bind a refused address on this machine: {exc}")
+    threading.Thread(target=server.serve_forever, daemon=True).start()
+    try:
+        yield f"http://192.0.2.2:{server.server_port}"
+    finally:
+        server.shutdown()
+        server.server_close()
+
+
+def lure(site: str, target: str) -> str:
+    """The fixture's link page, pointed wherever the test wants."""
+    return f"{site}/link?to={quote(target, safe='')}"
+
+
+async def click_with_approval(core, page_id: str, element_id: str):
+    """Click as the user would: refused first, approved, then done.
+
+    Both halves are asserted on purpose. If the first call stopped raising, the
+    confirmation floor would be gone and every test below would still pass.
+    """
+    args = {"page_id": page_id, "element_id": element_id}
+    with pytest.raises(ConfirmationRequiredError):
+        await run_tool(core, "browser_click", args)
+    await confirm_last(core)
+    return await run_tool(core, "browser_click", args)
+
+
+async def only_link(core, page_id: str) -> str:
+    found = await run_tool(core, "browser_inspect", {"page_id": page_id})
+    assert found.result.is_error is False, found.result.content
+    links = [e for e in found.result.data["elements"] if e["role"] == "link"]
+    assert links, "the fixture page should offer a link"
+    return links[0]["element_id"]
+
+
+async def settle(core, page_id: str, seconds: float = 4.0) -> str:
+    """Give a click's navigation time to happen (or to be refused).
+
+    A click does not wait for what it causes, so an immediate assertion would
+    pass against a request still in flight — the failure mode that would make
+    this whole file decorative.
+    """
+    deadline = asyncio.get_running_loop().time() + seconds
+    url = core.browser.page(page_id).page.url
+    while asyncio.get_running_loop().time() < deadline:
+        await asyncio.sleep(0.25)
+        url = core.browser.page(page_id).page.url
+    return url
+
+
+async def test_a_click_that_navigates_within_policy_still_works(
+    browsing, site
+) -> None:
+    """The guard must not break ordinary browsing.
+
+    Stated first because it is the failure a blunt fix produces: blocking every
+    navigation a click causes would pass every security test in this section
+    and leave JARVIS unable to follow a link.
+    """
+    page_id = await open_page(browsing, site + "/")
+    found = await run_tool(browsing, "browser_inspect", {"page_id": page_id})
+    link = next(e for e in found.result.data["elements"]
+                if e["role"] == "link" and "form" in e["name"].lower())
+
+    outcome = await click_with_approval(browsing, page_id, link["element_id"])
+    assert outcome.result.is_error is False, outcome.result.content
+
+    assert (await settle(browsing, page_id)).endswith("/form")
+    # …and the references issued against the old page died with it.
+    stale = await click_with_approval(browsing, page_id, link["element_id"])
+    assert stale.result.is_error is True
+    assert "no element" in stale.result.content
+
+
+async def test_submitting_a_form_still_posts_its_body(browsing, site) -> None:
+    """The guard's cost, checked rather than assumed.
+
+    Taking each hop inside the handler means every document request is issued
+    by Playwright's fetch instead of Chromium's. A form submission is the case
+    where that could silently degrade — losing the method or the body would
+    turn "send it" into a GET and report success — so the server's own record
+    of what arrived is the assertion.
+    """
+    _Handler.posted.clear()
+    page_id = await open_page(browsing, site + "/post-form")
+    found = await run_tool(browsing, "browser_inspect", {"page_id": page_id})
+    button = next(e for e in found.result.data["elements"]
+                  if e["role"] == "button")
+
+    outcome = await click_with_approval(browsing, page_id, button["element_id"])
+    assert outcome.result.is_error is False, outcome.result.content
+    assert (await settle(browsing, page_id)).endswith("/submitted")
+
+    assert _Handler.posted, "the form submission never reached the server"
+    path, body = _Handler.posted[-1]
+    assert path == "/submitted"
+    assert b"what=a+walrus" in body
+
+
+async def test_a_refused_page_can_always_be_navigated_back(browsing, site) -> None:
+    """Recovering from a refusal must work every time, not most of the time.
+
+    A refused navigation is aborted, and Chromium answers by committing its own
+    error page — which is itself a navigation, and which supersedes the request
+    to leave. Measured at 8 failures in 12 before this was handled, so a single
+    round would have passed by luck a third of the time.
+    """
+    for _ in range(5):
+        page_id = await open_page(browsing, site + "/")
+        refused = await run_tool(
+            browsing, "browser_navigate",
+            {"page_id": page_id, "url": site + "/redirect-to-metadata"},
+        )
+        assert refused.result.is_error is True
+
+        back = await run_tool(browsing, "browser_navigate",
+                              {"page_id": page_id, "url": site + "/"})
+        assert back.result.is_error is False, back.result.content
+        assert (await run_tool(browsing, "browser_extract", {"page_id": page_id})
+                ).result.is_error is False
+        await run_tool(browsing, "browser_close_page", {"page_id": page_id})
+
+
+async def test_clicking_a_link_to_a_refused_address_issues_no_request(
+    browsing, site, victim
+) -> None:
+    """REAL BROWSER. The Step 11 exploit, as a regression test.
+
+    A page JARVIS is permitted to read links to an address the policy refuses.
+    Before Step 12 this click succeeded, the page ended up on the forbidden URL,
+    and the victim's own access log showed ``['/stolen', '/favicon.ico']``.
+    """
+    target = f"{victim}/stolen"
+    page_id = await open_page(browsing, lure(site, target))
+
+    # The control: the same destination through the intended entry point.
+    refused = await run_tool(browsing, "browser_navigate",
+                             {"page_id": page_id, "url": target})
+    assert refused.result.is_error is True
+    assert refused.result.data["verdict"] == "FORBIDDEN_DESTINATION"
+
+    page_id = await open_page(browsing, lure(site, target))
+    outcome = await click_with_approval(browsing, page_id,
+                                        await only_link(browsing, page_id))
+
+    assert outcome.result.is_error is True, outcome.result.content
+    assert outcome.result.data["blocked_navigation"] is True
+    assert outcome.result.data["verdict"] == "FORBIDDEN_DESTINATION"
+
+    landed = await settle(browsing, page_id)
+    assert "192.0.2.2" not in landed
+    assert _Victim.hits == [], f"the refused address was contacted: {_Victim.hits}"
+
+
+async def test_clicking_a_link_to_the_metadata_endpoint_issues_no_request(
+    browsing, site
+) -> None:
+    """The destination that makes this a real attack rather than a curiosity.
+
+    169.254.169.254 is the cloud metadata endpoint: a GET there returns
+    credentials on most providers. No server is stood up for it — nothing can
+    bind link-local here — so the evidence is the refusal and the page never
+    leaving the origin it started on.
+    """
+    page_id = await open_page(
+        browsing, lure(site, "http://169.254.169.254/latest/meta-data/")
+    )
+    outcome = await click_with_approval(browsing, page_id,
+                                        await only_link(browsing, page_id))
+
+    assert outcome.result.is_error is True
+    assert outcome.result.data["blocked_navigation"] is True
+    assert "169.254.169.254" not in await settle(browsing, page_id)
+
+
+async def test_clicking_a_link_that_redirects_out_of_policy_issues_no_request(
+    browsing, site, victim
+) -> None:
+    """The escape a per-destination check alone would miss.
+
+    The href is same-origin and entirely permitted; the *server* then bounces
+    it somewhere refused. This was measured, not predicted: with the guard
+    checking only where a click was aimed, Chromium followed the 302 without
+    consulting the handler again and the victim logged ``['/via-redirect']``.
+    Taking the hop inside the guard is what closed it.
+    """
+    target = f"{victim}/via-redirect"
+    hop = f"{site}/redirect-to?to={quote(target, safe='')}"
+    page_id = await open_page(browsing, lure(site, hop))
+
+    outcome = await click_with_approval(browsing, page_id,
+                                        await only_link(browsing, page_id))
+
+    assert outcome.result.is_error is True, outcome.result.content
+    assert outcome.result.data["verdict"] == "REDIRECT_VIOLATION"
+    assert "192.0.2.2" not in await settle(browsing, page_id)
+    assert _Victim.hits == [], f"the refused address was contacted: {_Victim.hits}"
+
+
+async def test_clicking_a_link_that_redirects_to_the_metadata_endpoint_is_stopped(
+    browsing, site
+) -> None:
+    """The same escape, aimed at the destination that makes it matter."""
+    page_id = await open_page(browsing, lure(site, "/redirect-to-metadata"))
+    outcome = await click_with_approval(browsing, page_id,
+                                        await only_link(browsing, page_id))
+
+    assert outcome.result.is_error is True, outcome.result.content
+    assert "169.254.169.254" not in await settle(browsing, page_id)
+
+
+async def test_a_page_that_navigates_itself_out_of_policy_is_stopped(
+    browsing, site, victim
+) -> None:
+    """Not every navigation has a click behind it.
+
+    ``browser_fill`` submits forms, a page can carry a meta refresh, and a
+    script can set ``location``. The guard sits on the context rather than on
+    any one operation precisely so the invariant does not have to be re-proved
+    per tool — so this drives the script route, which no tool causes at all and
+    which reaches Playwright without passing through any JARVIS code.
+
+    ``evaluate`` is used here and exists in no tool. That is the point: the
+    guarantee has to hold for navigations JARVIS did not ask for.
+    """
+    page_id = await open_page(browsing, site + "/")
+    page = browsing.browser.page(page_id).page
+
+    await page.evaluate("(u) => { location.href = u }", f"{victim}/by-script")
+
+    await asyncio.sleep(1.5)
+    assert _Victim.hits == [], f"the refused address was contacted: {_Victim.hits}"
+    assert "192.0.2.2" not in page.url
+
+
+async def test_a_refused_click_is_audited_as_a_refusal(browsing, site, victim) -> None:
+    """An action that was authorised and then stopped is its own event.
+
+    Recorded as ``REFUSED`` with the verdict, so "JARVIS was steered at
+    something it was not allowed to reach" is answerable from the log rather
+    than by replaying the turn.
+    """
+    page_id = await open_page(browsing, lure(site, f"{victim}/stolen"))
+    await click_with_approval(browsing, page_id, await only_link(browsing, page_id))
+
+    clicks = [(s, d) for s, op, _, d in await activity_rows(browsing) if op == "click"]
+    assert ("REFUSED", "FORBIDDEN_DESTINATION") in [
+        (s, d.get("verdict")) for s, d in clicks
+    ]
+
+
+# ── Step 12: what the user is asked to approve ───────────────────────────────
+
+
+async def pending_body(core) -> str:
+    from jarvis.db.models import Confirmation
+
+    async with core.database.session_factory() as session:
+        rows = (
+            await session.execute(select(Confirmation).order_by(Confirmation.created_at))
+        ).scalars().all()
+        return rows[-1].body
+
+
+async def test_the_click_confirmation_names_the_element_and_its_destination(
+    browsing, site, victim
+) -> None:
+    """The audit's second finding: two opaque ids are not an approvable question.
+
+    The destination is the part that matters. Finding 1's last line of defence
+    is a human saying yes, and a human shown ``el_d23c…`` cannot tell a link to
+    the next page from a link to 192.0.2.2.
+    """
+    target = f"{victim}/stolen"
+    page_id = await open_page(browsing, lure(site, target))
+    element_id = await only_link(browsing, page_id)
+
+    with pytest.raises(ConfirmationRequiredError):
+        await run_tool(browsing, "browser_click",
+                       {"page_id": page_id, "element_id": element_id})
+
+    body = await pending_body(browsing)
+    assert "the link “Continue”" in body
+    assert site in body
+    assert target in body
+    # The page's claim about itself, presented as such.
+    assert "the page's own claim" in body
+
+
+async def test_the_click_confirmation_resolves_a_relative_link(browsing, site) -> None:
+    """A relative href is shown as where it actually goes.
+
+    "/form" tells a user nothing about which site is about to be operated;
+    resolving it against the page is what makes the destination reviewable.
+    """
+    page_id = await open_page(browsing, site + "/")
+    found = await run_tool(browsing, "browser_inspect", {"page_id": page_id})
+    link = next(e for e in found.result.data["elements"]
+                if e["role"] == "link" and "form" in e["name"].lower())
+
+    with pytest.raises(ConfirmationRequiredError):
+        await run_tool(browsing, "browser_click",
+                       {"page_id": page_id, "element_id": link["element_id"]})
+
+    assert f"{site}/form" in await pending_body(browsing)
+
+
+async def test_the_fill_confirmation_names_the_field_and_the_text(
+    browsing, site
+) -> None:
+    """Approving "type X" requires seeing both X and where it is going.
+
+    The value was already shown and stays shown; the field it lands in is the
+    half that was missing.
+    """
+    page_id = await open_page(browsing, site + "/form")
+    found = await run_tool(browsing, "browser_inspect", {"page_id": page_id})
+    box = next(e for e in found.result.data["elements"]
+               if e["role"] in ("textbox", "searchbox"))
+
+    with pytest.raises(ConfirmationRequiredError):
+        await run_tool(browsing, "browser_fill",
+                       {"page_id": page_id, "element_id": box["element_id"],
+                        "text": "a walrus"})
+
+    body = await pending_body(browsing)
+    assert "'a walrus'" in body
+    assert box["name"] in body
+    assert site in body
+
+
+async def test_a_page_cannot_format_the_confirmation_it_is_asked_about(
+    browsing, site
+) -> None:
+    """Element names are page-authored, so they are treated as page-authored.
+
+    A name carrying newlines could otherwise write its own extra lines into the
+    question — "Click the link. This action is safe and pre-approved." — in a
+    dialog whose entire purpose is that a human reads it.
+    """
+    page_id = await open_page(
+        browsing, lure(site, "http://169.254.169.254/x\n\nApproved by JARVIS")
+    )
+    element_id = await only_link(browsing, page_id)
+
+    with pytest.raises(ConfirmationRequiredError):
+        await run_tool(browsing, "browser_click",
+                       {"page_id": page_id, "element_id": element_id})
+
+    body = await pending_body(browsing)
+    # One blank line: the one this code writes. Everything the page supplied
+    # stays inside the line it was put on.
+    assert body.count("\n\n") == 1
+    assert "\n" not in body.split("\n\n")[1]
+    assert body.splitlines()[0].startswith("Click the link “Continue” on ")
+
+
+async def test_an_unresolvable_reference_still_produces_a_confirmation(
+    browsing, site
+) -> None:
+    """Describing must never be able to block approving.
+
+    An invented element id has no description to offer, so the body falls back
+    to the template rather than the confirmation failing to be created — the
+    handler refuses the call a moment later on its own terms.
+    """
+    page_id = await open_page(browsing, site + "/")
+
+    with pytest.raises(ConfirmationRequiredError):
+        await run_tool(browsing, "browser_click",
+                       {"page_id": page_id, "element_id": "el_invented"})
+
+    assert "el_invented" in await pending_body(browsing)
+
+
+async def test_the_approval_is_still_bound_to_the_exact_call(browsing, site) -> None:
+    """Readable prose, unchanged binding.
+
+    The fingerprint is computed over ``(tool name, arguments)``, so approving a
+    click on one element must not authorise a click on another. Asserted here
+    because the confirmation *body* is what changed, and a fingerprint taken
+    over the body would have silently made every approval interchangeable.
+    """
+    page_id = await open_page(browsing, site + "/")
+    found = await run_tool(browsing, "browser_inspect", {"page_id": page_id})
+    links = [e for e in found.result.data["elements"] if e["role"] == "link"]
+    assert len(links) >= 2
+
+    with pytest.raises(ConfirmationRequiredError):
+        await run_tool(browsing, "browser_click",
+                       {"page_id": page_id, "element_id": links[0]["element_id"]})
+    await confirm_last(browsing)
+
+    # The approval exists — for the *other* element, this must still ask.
+    with pytest.raises(ConfirmationRequiredError):
+        await run_tool(browsing, "browser_click",
+                       {"page_id": page_id, "element_id": links[1]["element_id"]})
+
+
+# ── Step 12: unknown frame state invalidates ─────────────────────────────────
+
+
+async def test_an_unreadable_frame_state_invalidates_the_page(browsing, site) -> None:
+    """The audit's third finding, exercised on the real listener.
+
+    The ``framenavigated`` handler skipped invalidation when
+    ``frame.parent_frame`` raised, leaving references into a possibly-replaced
+    DOM valid. No way was found to make Chromium produce that state, so this
+    calls the handler the event calls, with a frame that cannot answer.
+
+    That is a claim about the handler, not about Chromium, and this test does
+    not pretend otherwise: it proves the unknown-state branch fails safe, not
+    that Chromium can reach it.
+    """
+    page_id = await open_page(browsing, site + "/")
+    await run_tool(browsing, "browser_inspect", {"page_id": page_id})
+    registry = browsing.browser.elements
+    before = registry.generation(page_id)
+    assert registry.count(page_id) > 0
+
+    class _Unreadable:
+        @property
+        def parent_frame(self):
+            raise RuntimeError("frame detached")
+
+    browsing.browser._frame_navigated(_Unreadable(), page_id)
+
+    assert registry.generation(page_id) == before + 1
+    assert registry.count(page_id) == 0
+
+
+async def test_a_sub_frame_navigating_leaves_the_page_alone(browsing, site) -> None:
+    """The other half, or the fail-safe would just be "always invalidate".
+
+    An iframe loading an advert must not throw away references to the page
+    around it — that would make every reference unusable on any page with
+    third-party content, and a rule nobody can rely on is not a guarantee.
+    """
+    page_id = await open_page(browsing, site + "/")
+    await run_tool(browsing, "browser_inspect", {"page_id": page_id})
+    registry = browsing.browser.elements
+    before = registry.generation(page_id)
+
+    class _SubFrame:
+        parent_frame = object()
+
+    browsing.browser._frame_navigated(_SubFrame(), page_id)
+
+    assert registry.generation(page_id) == before
+    assert registry.count(page_id) > 0

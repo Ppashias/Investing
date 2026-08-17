@@ -168,6 +168,11 @@ class Tool:
     reversible: bool = True
     enabled: bool = True
 
+    #: Optional: render the confirmation body from the arguments *and* the
+    #: live context, for tools whose arguments are handles rather than
+    #: meaning. Returning a falsy value falls back to the template.
+    describe_confirmation: Any = None
+
     #: Argument names whose values must never be persisted.
     #:
     #: The executor writes every call's arguments to ``tool_executions`` and to
@@ -235,6 +240,31 @@ class Tool:
             for key, value in arguments.items()
         }
 
+    def confirmation_body(
+        self, arguments: dict[str, Any], ctx: "ToolContext"
+    ) -> str:
+        """What the user is asked to approve.
+
+        Falls back to the template, which is right for tools whose arguments
+        *are* the action ("create a task called X"). It is wrong for tools
+        whose arguments are opaque handles: "Click an element on the open page
+        (pg_08c0…/el_d23c…)" asks someone to approve two identifiers, which is
+        as unreadable as the coordinates this system rejected on exactly that
+        ground. Such a tool sets ``describe_confirmation`` and answers with
+        something a person can act on.
+
+        Given the live context because the meaning of a handle lives in a
+        registry the executor cannot reach — and must not have to know about.
+        """
+        if self.describe_confirmation is not None:
+            try:
+                described = self.describe_confirmation(arguments, ctx)
+            except Exception:  # pragma: no cover - never block on cosmetics
+                described = None
+            if described:
+                return described
+        return self.confirmation_text(arguments)
+
     def confirmation_text(self, arguments: dict[str, Any]) -> str:
         if self.confirmation_template:
             try:
@@ -268,6 +298,7 @@ def tool(
     reversible: bool = True,
     category: str = "general",
     confirmation_template: str | None = None,
+    describe_confirmation: Any = None,
     redact_arguments: tuple[str, ...] = (),
 ) -> Callable[[ToolHandler], Tool]:
     """Decorator turning an async function into a :class:`Tool`."""
@@ -285,6 +316,7 @@ def tool(
             reversible=reversible,
             category=category,
             confirmation_template=confirmation_template,
+            describe_confirmation=describe_confirmation,
             redact_arguments=redact_arguments,
         )
         built.validate_handler()

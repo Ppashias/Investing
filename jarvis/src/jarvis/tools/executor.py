@@ -250,7 +250,7 @@ class ToolExecutor:
             ConfirmationRequest(
                 user_id=ctx.user_id,
                 title=f"Allow {tool.name}?",
-                body=tool.confirmation_text(call.arguments),
+                body=tool.confirmation_body(call.arguments, ctx),
                 tool_name=tool.name,
                 arguments=call.arguments,
                 stored_arguments=tool.for_audit(call.arguments),
@@ -361,7 +361,7 @@ class ToolExecutor:
                 # The handler knows what it is asking about; the tool's generic
                 # template does not. "Let JARVIS browse example.com?" is a
                 # question someone can answer.
-                body=signal.prompt or tool.confirmation_text(call.arguments),
+                body=signal.prompt or tool.confirmation_body(call.arguments, ctx),
                 tool_name=tool.name,
                 arguments=call.arguments,
                 stored_arguments=tool.for_audit(call.arguments),

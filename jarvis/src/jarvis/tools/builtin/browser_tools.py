@@ -54,6 +54,7 @@ itself.
 from __future__ import annotations
 
 from typing import Any
+from urllib.parse import urljoin
 
 from jarvis.browser import operations
 from jarvis.browser.capabilities import BrowserError, BrowserUnavailable
@@ -300,6 +301,24 @@ def _origin_of(ctx: ToolContext, page_id: str) -> str:
     refuses it until it is navigated somewhere allowed or closed.
     """
     handle = _page(ctx, page_id)
+
+    # A refused navigation first, because ``page.url`` cannot answer it. The
+    # guard aborts before Chromium commits anything, so for a short window the
+    # page still reports the address it was on when the refused navigation
+    # started — permitted, and about to be replaced by an error page. Reading
+    # the URL alone would let a tool act inside that window on a page whose
+    # state nobody vouched for. The flag is set by the guard and cleared by the
+    # next deliberate navigation, so a page whose last move was refused stays
+    # inert until it is moved somewhere permitted or closed.
+    if handle.blocked is not None:
+        raise BrowserError(
+            f"This page's last navigation was refused "
+            f"({handle.blocked.verdict.value}). Navigate it somewhere "
+            "permitted or close it.",
+            f"That page is somewhere I am not allowed to act: "
+            f"{handle.blocked.reason}",
+        )
+
     decision = _url_policy(ctx).check(handle.page.url)
     if not decision.allowed:
         raise BrowserError(
@@ -780,6 +799,105 @@ _TARGET_SCHEMA_PROPERTIES = {
 }
 
 
+# ── what the user is actually asked to approve ───────────────────────────────
+#
+# "Click an element on the open page (pg_08c0…/el_d23c…)" is two opaque
+# identifiers. §4.3 of the control decision rejected coordinates partly because
+# "click at (840, 312)" is not something a human can meaningfully approve, and
+# an id pair is no better: it asks someone to authorise a click without telling
+# them what is being clicked or where it leads.
+#
+# What is shown, and why each part is safe to show:
+#
+# * **The element's role and accessible name** — the page's own labelling,
+#   already returned verbatim to the model by ``browser_inspect``. Nothing
+#   secret; it is what the user would read on screen.
+# * **The page's current address** — already in ``browser_pages`` output and in
+#   every audit row for this action.
+# * **For a link, its destination** — the single most decision-relevant fact,
+#   and the thing whose absence made a link click unreviewable. Resolved
+#   against the page URL so a relative href is shown as where it actually goes.
+# * **For a fill, the text being typed** — unchanged from the existing template.
+#   Approving "type X" requires seeing X, credential fields are refused before
+#   any keystroke, and the value is already redacted everywhere it is *stored*.
+#
+# Nothing here reads a cookie, a storage entry, a header or a field value. The
+# name and the href are page-authored, so they are whitespace-collapsed, length
+# capped, and attributed to the page rather than stated as fact — a site that
+# labels its link "Safe, approved by JARVIS" gets that quoted back as its own
+# claim.
+#
+# This changes only the prose. The fingerprint the approval is bound to is
+# still computed over ``(tool name, arguments)``, so the approval remains
+# single-use and tied to this exact page/element/text.
+
+
+def _page_text(value: Any, limit: int) -> str:
+    """Page-authored text, made fit for a one-line dialog.
+
+    Collapsing whitespace is not cosmetic: newlines in a confirmation body let
+    a page format its own extra lines into the question the user is reading.
+    """
+    text = " ".join(str(value or "").split())
+    return text[:limit] + ("…" if len(text) > limit else "")
+
+
+def _phrase(entry: Any) -> str:
+    """"the link “Continue”" — role first, so the noun is never page-authored."""
+    phrase = f"the {entry.role or 'element'}"
+    name = _page_text(entry.name, 80)
+    return phrase + (f" “{name}”" if name else "")
+
+
+def _pending_target(arguments: dict[str, Any], ctx: ToolContext):
+    """Resolve the element a pending click/fill names, or ``None``.
+
+    Returns ``None`` rather than raising for anything unresolvable — an
+    unknown page, a stale reference, a missing browser. The handler will refuse
+    such a call on its own terms; the confirmation's job here is only to
+    describe, and a description that cannot be produced falls back to the
+    template rather than blocking the approval.
+    """
+    page_id = arguments.get("page_id")
+    element_id = arguments.get("element_id")
+    if not isinstance(page_id, str) or not isinstance(element_id, str):
+        return None
+    try:
+        handle, entry = _resolve(ctx, page_id, element_id)
+    except (BrowserError, BrowserUnavailable):
+        return None
+    return entry, handle.page.url
+
+
+def _describe_click(arguments: dict[str, Any], ctx: ToolContext) -> str | None:
+    found = _pending_target(arguments, ctx)
+    if found is None:
+        return None
+    entry, page_url = found
+    body = f"Click {_phrase(entry)} on {_page_text(page_url, 200)}."
+    if entry.href:
+        try:
+            destination = urljoin(page_url, entry.href.strip())
+        except Exception:  # pragma: no cover - an href urljoin cannot parse
+            destination = entry.href
+        body += (
+            f"\n\nThe page says this link leads to {_page_text(destination, 200)} "
+            "— that is the page's own claim about itself."
+        )
+    return body
+
+
+def _describe_fill(arguments: dict[str, Any], ctx: ToolContext) -> str | None:
+    found = _pending_target(arguments, ctx)
+    if found is None:
+        return None
+    entry, page_url = found
+    return (
+        f"Type {arguments.get('text', '')!r} into {_phrase(entry)} on "
+        f"{_page_text(page_url, 200)}."
+    )
+
+
 @tool(
     name="browser_click",
     description=(
@@ -802,6 +920,9 @@ _TARGET_SCHEMA_PROPERTIES = {
     requires_confirmation=True,
     reversible=False,
     category="browser",
+    describe_confirmation=_describe_click,
+    # Only reached when the element cannot be resolved — a stale or invented
+    # reference, which the handler is about to refuse anyway.
     confirmation_template="Click an element on the open page ({page_id}/{element_id}).",
 )
 async def browser_click(*, ctx: ToolContext, page_id: str, element_id: str) -> ToolResult:
@@ -832,6 +953,8 @@ async def browser_click(*, ctx: ToolContext, page_id: str, element_id: str) -> T
 
     auth = await _authorize(ctx, BrowserOperation.INTERACT, origin)
 
+    handle = _page(ctx, page_id)
+    handle.blocked = None
     try:
         described = await operations.click(
             entry, timeout_seconds=_service(ctx).settings.navigation_timeout_seconds
@@ -846,6 +969,30 @@ async def browser_click(*, ctx: ToolContext, page_id: str, element_id: str) -> T
         )
         return ToolResult.error(exc.user_message, page_id=page_id,
                                 element_id=element_id)
+
+    # A click can navigate, and the context guard may have refused where it
+    # was going. Reporting success then would be the fake-success failure this
+    # system exists to avoid: the model would believe it had followed a link
+    # that never loaded.
+    blocked = handle.blocked
+    if blocked is not None:
+        # Left set, like the navigation path: the page is now on whatever
+        # Chromium shows for an aborted load, and it stays inert until it is
+        # deliberately navigated somewhere permitted.
+        await _audit(
+            ctx, "click", status="REFUSED",
+            summary=f"Clicked {described} on {origin}, refused its destination",
+            detail={"origin": origin, "element": described,
+                    "element_id": element_id, "page_id": page_id,
+                    "verdict": blocked.verdict.value, "reason": blocked.reason,
+                    **_decided(auth)},
+        )
+        return ToolResult.error(
+            f"{described} leads somewhere JARVIS may not go, so the page was "
+            f"not loaded: {blocked.reason}",
+            page_id=page_id, element_id=element_id,
+            verdict=blocked.verdict.value, blocked_navigation=True,
+        )
 
     await _audit(
         ctx, "click", status="OK",
@@ -885,6 +1032,7 @@ async def browser_click(*, ctx: ToolContext, page_id: str, element_id: str) -> T
     # The value is what the user is typing into somebody's website. It belongs
     # in the confirmation they read and not in a log that outlives the turn.
     redact_arguments=("text",),
+    describe_confirmation=_describe_fill,
     confirmation_template=(
         "Type {text!r} into an element on the open page ({page_id}/{element_id})."
     ),

@@ -88,9 +88,11 @@ module imports nothing from :mod:`jarvis.computer`.
 from __future__ import annotations
 
 import asyncio
+from contextlib import suppress
 from dataclasses import dataclass, field
 from datetime import datetime
 from typing import Any
+from urllib.parse import urljoin
 
 from jarvis.browser.capabilities import (
     BrowserAvailability,
@@ -101,6 +103,7 @@ from jarvis.browser.capabilities import (
 )
 from jarvis.browser.elements import ElementRegistry
 from jarvis.browser.settings import BrowserSettings
+from jarvis.browser.urls import UrlPolicy
 from jarvis.db.base import new_id, utcnow
 from jarvis.logging import get_logger
 
@@ -121,6 +124,14 @@ class PageHandle:
     page: Any  # playwright.async_api.Page — typed loosely so this module
     # imports cleanly where Playwright is absent.
     created_at: datetime = field(default_factory=utcnow)
+    #: The last navigation the context guard refused for this page, or None.
+    #:
+    #: Set by :meth:`BrowserService._guard_navigation` at the moment a request
+    #: is aborted, and read by callers that need to explain *why* a navigation
+    #: failed — Chromium reports an aborted navigation as a generic transport
+    #: error, which would otherwise turn a policy refusal into "could not
+    #: load". Cleared by whoever is about to navigate.
+    blocked: Any = None
 
     @property
     def closed(self) -> bool:
@@ -429,6 +440,126 @@ class BrowserService:
             self.settings.navigation_timeout_seconds * 1000
         )
 
+        # The URL policy, enforced where every navigation must pass — not only
+        # where JARVIS asks for one. ``browser_navigate`` checks before calling
+        # goto, but a click on a link, a script, a meta refresh and a redirect
+        # all navigate without asking anyone. Step 11 proved that: a click
+        # reached a private address that explicit navigation had just refused,
+        # and the victim server logged the request.
+        #
+        # Routing at the context is the only layer that sees all of them, and
+        # it aborts before the request is dispatched, so the destination is
+        # never contacted rather than merely never read.
+        await self._context.route("**/*", self._guard_navigation)
+
+    async def _guard_navigation(self, route: Any, request: Any) -> None:
+        """Abort any *document* navigation the URL policy would refuse.
+
+        Scoped to documents on purpose, and the limit is worth stating: a page
+        JARVIS is allowed to read may still fetch its own images and scripts
+        from wherever it likes, exactly as it would in the user's own browser.
+        What this stops is the browser being *steered* to a destination the
+        policy refuses — which is the boundary Step 11 found broken.
+
+        The policy is rebuilt per request from the live settings rather than
+        captured at launch, so it always agrees with the copy the tools build
+        from the same source. There is deliberately no second policy here.
+
+        Fails closed. An error deciding whether a destination is permitted
+        aborts the navigation, because the alternative is dispatching a request
+        nobody vouched for.
+        """
+        try:
+            if getattr(request, "resource_type", None) != "document":
+                await route.continue_()
+                return
+
+            policy = UrlPolicy(
+                allow_localhost=self.settings.allow_localhost,
+                allow_private_networks=self.settings.allow_private_networks,
+            )
+            decision = policy.check(request.url)
+
+            if not decision.allowed:
+                await self._block(route, request, decision)
+                return
+
+            await self._follow(route, request, policy)
+        except Exception as exc:  # pragma: no cover - defensive, fails closed
+            log.warning("browser_navigation_guard_failed", error=str(exc))
+            with suppress(Exception):
+                await route.abort("failed")
+
+    async def _follow(self, route: Any, request: Any, policy: UrlPolicy) -> None:
+        """Take a permitted document request, one redirect hop at a time.
+
+        Chromium does not consult a route handler again for a hop the *server*
+        chose: ``route.continue_()`` on a URL that answers 302 follows the
+        Location internally, and the handler sees nothing. Measured, not
+        assumed — a click on a permitted link whose server bounced it into a
+        refused address reached that address with the handler never called for
+        it.
+
+        So the hop is taken here instead of by the network stack. The request
+        is issued with redirects disabled; a 3xx is checked against the policy
+        before anything else happens, and only then handed back to Chromium,
+        which re-requests the new location and arrives at this handler again.
+        Each hop is therefore checked *before* it is dispatched, which is the
+        difference between "the response was not read" and "the request was
+        never made" — and only the second is worth anything against a
+        destination that acts on being contacted at all.
+
+        The cost is that every document load goes through Playwright's own
+        fetch rather than Chromium's, so this deliberately does not apply to
+        sub-resources: a permitted page's own images and scripts are its
+        business, and routing them through here would buy nothing and change
+        much.
+        """
+        response = await route.fetch(max_redirects=0)
+        location = (response.headers or {}).get("location", "")
+
+        if 300 <= response.status < 400 and location:
+            landed = policy.check_redirect(
+                urljoin(request.url, location), from_url=request.url
+            )
+            if not landed.allowed:
+                await self._block(route, request, landed)
+                return
+
+        await route.fulfill(response=response)
+
+    async def _block(self, route: Any, request: Any, decision: Any) -> None:
+        """Refuse the navigation, and leave enough behind to explain it.
+
+        The refusal is recorded on the page *before* the abort: Chromium turns
+        an aborted navigation into a generic transport error, so without this
+        the tool layer could only report "could not load" — indistinguishable
+        from the site being down, for a page that was deliberately refused.
+        """
+        self._record_block(request, decision)
+        log.warning(
+            "browser_navigation_blocked",
+            url=decision.url,
+            verdict=decision.verdict.value,
+            reason=decision.reason,
+        )
+        await route.abort("blockedbyclient")
+
+    def _record_block(self, request: Any, decision: Any) -> None:
+        """Attach the refusal to the page it was aimed at, if we can find it.
+
+        Best effort by design: the decision is already logged, and losing the
+        attribution costs an explanation rather than the protection.
+        """
+        try:
+            page = request.frame.page
+        except Exception:  # pragma: no cover - a frame without a page
+            return
+        for handle in self._pages.values():
+            if handle.page is page:
+                handle.blocked = decision
+                return
+
     def _on_disconnected(self, _browser: Any) -> None:
         """Playwright's callback when the browser process goes away.
 
@@ -492,19 +623,46 @@ class BrowserService:
             # navigation tool: the page can navigate without JARVIS asking —
             # a redirect, a meta refresh, a script — and references must go
             # stale for those too, or the ones that matter most survive.
-            def _navigated(frame: Any, _page_id: str = handle.page_id) -> None:
-                try:
-                    if frame.parent_frame is not None:
-                        return  # a sub-frame; the page itself is unchanged
-                except Exception:  # pragma: no cover - defensive
-                    return
-                self.elements.page_navigated(_page_id)
-
-            page.on("framenavigated", _navigated)
+            page.on(
+                "framenavigated",
+                lambda frame, _page_id=handle.page_id: self._frame_navigated(
+                    frame, _page_id
+                ),
+            )
 
             log.info("browser_page_opened", page_id=handle.page_id,
                      pages=self.page_count)
             return handle
+
+    def _frame_navigated(self, frame: Any, page_id: str) -> None:
+        """A frame moved. Decide whether the page's references survive it.
+
+        The only reason to keep them is positive knowledge that this was a
+        sub-frame. Anything else — an attribute that raises, a frame detached
+        between the event and this call — means the page may have been replaced
+        and we cannot tell, so the references go.
+
+        That default is not caution for its own sake. A locator is a lazily
+        resolved selector, so a reference that survives a navigation resolves
+        against the *new* DOM and matches whatever now sits where the old
+        element was. Acting on it is the "clicks whatever happens to be there"
+        failure this registry exists to prevent, and it would be reported as a
+        success. Losing references costs an extra inspection; keeping the wrong
+        ones costs the guarantee.
+
+        A named method rather than the closure it replaced, so the unreadable
+        frame case can be exercised by a test instead of only reasoned about.
+        """
+        try:
+            is_subframe = frame.parent_frame is not None
+        except Exception as exc:
+            log.warning(
+                "browser_frame_state_unknown", page_id=page_id, error=str(exc)
+            )
+            is_subframe = False
+        if is_subframe:
+            return  # a sub-frame; the page itself is unchanged
+        self.elements.page_navigated(page_id)
 
     def page(self, page_id: str) -> PageHandle:
         """Look up an open page. Raises if it is unknown, closed, or orphaned.

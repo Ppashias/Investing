@@ -119,6 +119,11 @@ class ElementEntry:
     description: str
     role: str = ""
     name: str = ""
+    #: Where a link goes, captured at inspection time.
+    #:
+    #: Held so the confirmation a human reads can name the destination. It is
+    #: page-authored text and is treated as such wherever it is shown.
+    href: str = ""
 
     def describe(self) -> dict[str, Any]:
         return {
@@ -126,6 +131,7 @@ class ElementEntry:
             "description": self.description,
             "role": self.role,
             "name": self.name,
+            "href": self.href,
         }
 
 
@@ -163,6 +169,7 @@ class ElementRegistry:
         description: str,
         role: str = "",
         name: str = "",
+        href: str = "",
     ) -> ElementRef:
         """Issue a reference for an element that was actually found."""
         page = self._pages.setdefault(page_id, _PageElements())
@@ -170,7 +177,8 @@ class ElementRegistry:
             element_id=new_id("el"), page_id=page_id, generation=page.generation
         )
         page.entries[ref.element_id] = ElementEntry(
-            ref=ref, locator=locator, description=description, role=role, name=name
+            ref=ref, locator=locator, description=description, role=role,
+            name=name, href=href,
         )
         while len(page.entries) > self.max_elements:
             evicted, _ = page.entries.popitem(last=False)

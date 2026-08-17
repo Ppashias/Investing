@@ -477,11 +477,16 @@ def test_no_credential_handling_exists_in_the_runtime() -> None:
 
     Step 2 has no input capability at all. The assertion is cheap now and
     becomes the thing that notices if a later step adds one to the wrong layer.
+
+    ``fill(`` is matched with its leading dot as of Step 12, because the
+    navigation guard calls ``route.fulfill()`` and the bare token matched it as
+    a substring. The rule is unchanged — ``locator.fill(...)`` is still banned
+    in every module here, which is what "nothing types anything" means.
     """
     for name in BROWSER_MODULES:
         source = code_of(browser_module(name)).lower()
         for forbidden in ("password", "credential(", "def login", "keyring",
-                          "enter_password", "fill(", "type("):
+                          "enter_password", ".fill(", "type("):
             assert forbidden not in source, f"{forbidden} in {name}"
 
 
