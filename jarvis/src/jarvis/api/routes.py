@@ -456,6 +456,153 @@ async def stream_activity(core: CoreDep, _: AuthDep) -> StreamingResponse:
     )
 
 
+@activity_router.get("/console")
+async def stream_console(core: CoreDep, _: AuthDep) -> StreamingResponse:
+    """The command centre's event stream.
+
+    The same bus and the same transport as ``/activity/stream``, filtered and
+    reshaped into the closed vocabulary in :mod:`jarvis.events.schema`. A
+    second endpoint rather than a second bus: one place produces the truth, and
+    two views of it cannot disagree about what happened.
+
+    Records the console has no view for are dropped here rather than sent and
+    ignored, so a tab is not woken for every model call.
+    """
+    from jarvis.events.schema import envelope
+
+    async def event_source():
+        queue = await core.activity_bus.subscribe()
+        try:
+            yield 'event: ready\ndata: {"ok":true}\n\n'
+            while True:
+                try:
+                    event = await asyncio.wait_for(queue.get(), timeout=15.0)
+                except asyncio.TimeoutError:
+                    yield ": heartbeat\n\n"
+                    continue
+                payload = envelope(event)
+                if payload is None:
+                    continue
+                yield f"event: console\ndata: {json.dumps(payload)}\n\n"
+        except asyncio.CancelledError:
+            raise
+        finally:
+            await core.activity_bus.unsubscribe(queue)
+
+    return StreamingResponse(
+        event_source(),
+        media_type="text/event-stream",
+        headers={"Cache-Control": "no-cache", "Connection": "keep-alive",
+                 "X-Accel-Buffering": "no"},
+    )
+
+
+# ── agents and background work ───────────────────────────────────────────────
+
+agents_router = APIRouter(prefix="/agents", tags=["agents"])
+
+
+@agents_router.get("")
+async def list_agents(core: CoreDep, _: AuthDep) -> dict[str, Any]:
+    """Running delegated agents and background jobs.
+
+    Read-only by construction. There is deliberately no endpoint here that
+    *creates* an agent: spawning hands authority to a second actor, so it goes
+    through ``spawn_agent`` and therefore through ToolExecutor, the permission
+    engine and the confirmation flow. A console button that spawned one
+    directly would be the bypass this architecture exists to prevent.
+    """
+    runner = getattr(core, "background", None)
+    jobs = [job.describe() for job in runner.list()] if runner else []
+    return {
+        "jobs": jobs,
+        "running_jobs": sum(1 for j in jobs if j["state"] == "RUNNING"),
+        # The root agent is the user's own loop; it has no ceiling because the
+        # grants are the whole story for it.
+        "root": {"role": "jarvis", "depth": 0, "capabilities": None},
+    }
+
+
+@agents_router.post("/jobs/{job_id}/{action}")
+async def control_job(
+    job_id: str, action: str, core: CoreDep, _: AuthDep
+) -> dict[str, Any]:
+    """Pause, resume or cancel a background job.
+
+    These three are not tool calls and deliberately do not go through
+    ToolExecutor: they *withdraw* authority rather than exercise it. Pausing
+    something cannot do anything the running job was not already permitted to
+    do, and requiring an approval to stop work would be an approval fatigue
+    trap at exactly the wrong moment.
+
+    There is no ``start`` here for the same reason in reverse.
+    """
+    runner = getattr(core, "background", None)
+    if runner is None:
+        raise HTTPException(status.HTTP_503_SERVICE_UNAVAILABLE,
+                            "Background execution is not available")
+    if action not in {"pause", "resume", "cancel"}:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, "Unknown action")
+
+    done = getattr(runner, action)(job_id)
+    job = runner.get(job_id)
+    return {"ok": bool(done), "job": job.describe() if job else None}
+
+
+# ── security ─────────────────────────────────────────────────────────────────
+
+security_router = APIRouter(prefix="/security", tags=["security"])
+
+
+@security_router.get("")
+async def security_state(core: CoreDep, session: SessionDep, user: UserDep,
+                         _: AuthDep) -> dict[str, Any]:
+    """One place answering "is anything wrong, and what is currently allowed?".
+
+    Assembled from existing sources rather than a new store: the stop latch,
+    the computer policy, the grant table and the telemetry view. A security
+    panel with its own state would be a second opinion, and the one that is
+    wrong is always the one on screen.
+    """
+    from sqlalchemy import select
+
+    from jarvis.telemetry.service import TelemetryService
+
+    # Composed from ``core.status()`` rather than by reaching into the
+    # subsystems. ``test_the_api_module_does_not_import_the_browser_service``
+    # exists to stop a route driving the browser, and it is deliberately blunt
+    # — blunt is what makes it hold. A security panel that read
+    # the browser's settings object directly would be the first exception, and
+    # the second would be a route that also opened a page.
+    status_report = core.status()
+    stop = getattr(core.computer, "emergency_stop", None)
+    report = await TelemetryService(session).report(window_hours=24)
+
+    grants = (
+        await session.execute(
+            select(PermissionGrant).where(
+                PermissionGrant.user_id == user.id,
+                PermissionGrant.revoked_at.is_(None),
+            )
+        )
+    ).scalars().all()
+
+    runner = getattr(core, "background", None)
+    return {
+        "emergency_stop": stop.state().to_dict() if stop else None,
+        "browser": status_report.get("browser", {}),
+        "computer": status_report.get("computer", {}),
+        "grants": [
+            {"capability": g.capability.value, "scope": g.resource_scope,
+             "mode": g.mode.value, "conditions": g.conditions or {}}
+            for g in grants
+        ],
+        "denied_last_24h": report.permission_decisions.get("DENY", 0),
+        "running_jobs": len(runner.active) if runner else 0,
+        "top_error_codes": report.top_error_codes,
+    }
+
+
 # ── system ───────────────────────────────────────────────────────────────────
 
 system_router = APIRouter(prefix="/system", tags=["system"])
@@ -542,6 +689,8 @@ ALL_ROUTERS = [
     permissions_router,
     confirmations_router,
     activity_router,
+    agents_router,
+    security_router,
     system_router,
     *MEMORY_ROUTERS,
     *OBSIDIAN_ROUTERS,

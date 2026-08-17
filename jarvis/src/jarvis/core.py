@@ -287,6 +287,20 @@ class JarvisCore:
                 "display_kind": self.computer.capabilities.display_kind,
                 "emergency_stop": self.computer.emergency_stop.engaged,
             },
+            # Live browser stance, alongside computer's. Surfaced here rather
+            # than read from the service by a route: the API layer is barred
+            # from touching BrowserService at all, by a test, and the core is
+            # the one place that legitimately owns it.
+            "browser": {
+                "enabled": self.browser.settings.enabled,
+                "allow_localhost": self.browser.settings.allow_localhost,
+                "allow_private_networks":
+                    self.browser.settings.allow_private_networks,
+                "headless": self.browser.settings.headless,
+                "persists_storage": self.browser.settings.persists_storage,
+                "pages_open": self.browser.page_count,
+                "running": self.browser.started,
+            },
             "embeddings": {
                 "provider": self.embeddings.info.key,
                 "model": self.embeddings.info.model,

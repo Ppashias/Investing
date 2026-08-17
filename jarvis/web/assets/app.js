@@ -144,6 +144,11 @@
     return data;
   }
 
+  /* The console panels call the API through this rather than holding the
+     token themselves. One holder means one place re-authentication has to
+     reach, and no second copy to leave in a closure somewhere. */
+  window.jarvisApi = api;
+
   /* ── auth ───────────────────────────────────────────────────────────── */
 
   function showAuthGate(message) {
@@ -386,6 +391,9 @@
       if (wanted === "memory") refreshMemory();
       if (wanted === "knowledge") refreshKnowledge();
       if (wanted === "computer") refreshComputer();
+      if (wanted === "console") {
+        document.dispatchEvent(new CustomEvent("jarvis:authenticated"));
+      }
     });
   });
 
@@ -437,16 +445,21 @@
    * browser history, and Referer headers). Parsing SSE frames by hand is a
    * small price for keeping the credential in an Authorization header.
    */
-  async function connectActivityStream() {
-    if (state.streamAbort) state.streamAbort.abort();
+  /* One reader, parameterised. The activity feed and the command centre want
+     different vocabularies off the same bus — raw records for the audit view,
+     the closed console vocabulary for the panels — and two hand-written
+     readers would drift in exactly the way SSE frame parsing drifts: quietly,
+     in the buffering. */
+  async function openStream(path, wanted, onPayload) {
     const abort = new AbortController();
-    state.streamAbort = abort;
+    state.streamAborts = state.streamAborts || [];
+    state.streamAborts.push(abort);
 
     const headers = { Accept: "text/event-stream" };
     if (state.token) headers.Authorization = "Bearer " + state.token;
 
     try {
-      const response = await fetch("/api/activity/stream", {
+      const response = await fetch("/api" + path, {
         headers: headers,
         signal: abort.signal,
       });
@@ -467,7 +480,7 @@
         while ((split = buffer.indexOf("\n\n")) !== -1) {
           const frame = buffer.slice(0, split);
           buffer = buffer.slice(split + 2);
-          handleFrame(frame);
+          handleFrame(frame, wanted, onPayload);
         }
       }
       setConnection(false);
@@ -476,11 +489,11 @@
       setConnection(false);
       // Reconnect with a fixed delay. A backoff ladder is not worth it for a
       // loopback connection whose failure mode is "the server restarted".
-      setTimeout(connectActivityStream, 3000);
+      setTimeout(() => openStream(path, wanted, onPayload), 3000);
     }
   }
 
-  function handleFrame(frame) {
+  function handleFrame(frame, wanted, onPayload) {
     let eventName = "message";
     const dataLines = [];
     frame.split("\n").forEach((line) => {
@@ -488,10 +501,26 @@
       else if (line.startsWith("data:")) dataLines.push(line.slice(5).trim());
       // lines starting with ':' are heartbeat comments — ignored
     });
-    if (eventName !== "activity" || !dataLines.length) return;
+    if (eventName !== wanted || !dataLines.length) return;
     try {
-      pushActivity(JSON.parse(dataLines.join("\n")));
+      onPayload(JSON.parse(dataLines.join("\n")));
     } catch (_) { /* a malformed frame must not kill the stream */ }
+  }
+
+  /* Two streams off one bus: the audit feed keeps the raw records, the console
+     panels get the filtered vocabulary the server defines. Classifying on the
+     client instead would put a second copy of the event schema in JavaScript,
+     and the copy that drifts is always the one nobody tests. */
+  function startStreams() {
+    for (const abort of state.streamAborts || []) abort.abort();
+    state.streamAborts = [];
+    openStream("/activity/stream", "activity", pushActivity);
+    openStream("/activity/console", "console", (payload) => {
+      document.dispatchEvent(
+        new CustomEvent("jarvis:console", { detail: payload })
+      );
+    });
+    document.dispatchEvent(new CustomEvent("jarvis:authenticated"));
   }
 
   function setConnection(ok) {
@@ -1392,7 +1421,7 @@
       const activity = await api("/activity?limit=50");
       activity.activity.reverse().forEach(pushActivity);
 
-      connectActivityStream();
+      startStreams();
       refreshTasks();
     } catch (err) {
       if (err.message !== "unauthorized") {

@@ -37,6 +37,7 @@
   </div>
 </div>
 
+<div id="modeBanner" class="mode-banner" data-mode="SAFE">MODE SAFE</div>
 <main class="layout">
 
   <!-- ── conversation ─────────────────────────────────────────────────── -->
@@ -72,7 +73,8 @@
   <!-- ── right rail ───────────────────────────────────────────────────── -->
   <aside class="panel rail">
     <div class="tabs" role="tablist">
-      <button class="tab sel" data-tab="activity" role="tab">Activity</button>
+      <button class="tab sel" data-tab="console" role="tab">Command</button>
+      <button class="tab" data-tab="activity" role="tab">Activity</button>
       <button class="tab" data-tab="memory" role="tab">Memory</button>
       <button class="tab" data-tab="knowledge" role="tab">Knowledge</button>
       <button class="tab" data-tab="computer" role="tab">Computer</button>
@@ -81,7 +83,26 @@
       <button class="tab" data-tab="system" role="tab">System</button>
     </div>
 
-    <div class="tabpanel" data-panel="activity">
+    <div id="consoleRoot" class="tabpanel" data-panel="console">
+      <div class="rail-head">
+        <h4>Awaiting you</h4><span id="approvalCount" class="dim">0</span>
+      </div>
+      <ul id="approvalList" class="approval-list"></ul>
+
+      <div class="rail-head"><h4>Background work</h4></div>
+      <ul id="jobList" class="job-list"></ul>
+
+      <div class="rail-head"><h4>Security</h4></div>
+      <ul id="securityList" class="sec-list"></ul>
+
+      <div class="rail-head"><h4>Grants (read-only)</h4></div>
+      <ul id="grantList" class="sec-list"></ul>
+
+      <div class="rail-head"><h4>Live events</h4></div>
+      <ul id="consoleFeed" class="console-feed"></ul>
+    </div>
+
+    <div class="tabpanel" data-panel="activity" hidden>
       <div class="rail-head">
         <span id="activityCount" class="dim">0 events</span>
         <button id="clearActivity" class="ghost small">Clear</button>
@@ -290,5 +311,6 @@
 <script src="/assets/hud.js" defer></script>
 <script src="/assets/app.js"></script>
 <script src="/assets/voice.js" defer></script>
+<script src="/assets/console.js" defer></script>
 </body>
 </html>

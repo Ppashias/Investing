@@ -311,7 +311,7 @@ input:focus,select:focus{outline:none; border-color:var(--accent-soft)}
   color:var(--dim); padding:5px 9px; white-space:nowrap; font-size:10px;
   letter-spacing:.08em;
 }
-.tab[aria-selected="true"], .tab.active{
+.tab.sel{
   color:var(--accent); border-color:var(--border);
   background:rgba(79,216,255,.07);
   box-shadow:0 -2px 0 var(--accent) inset;
@@ -519,3 +519,93 @@ input:focus,select:focus{outline:none; border-color:var(--accent-soft)}
 @media (prefers-reduced-motion: reduce){
   #micBtn.on{animation:none; box-shadow:0 0 0 3px var(--gold-glow)}
 }
+
+/* ── command centre ───────────────────────────────────────────────────── */
+
+/* The mode banner. Asked to be impossible to miss, and it carries the word as
+   well as the colour — someone who cannot separate amber from red must still
+   be able to tell AUTONOMOUS from LOCKDOWN, which is the most consequential
+   distinction on the page. */
+.mode-banner{
+  padding:6px 16px; font-size:11px; font-weight:700;
+  letter-spacing:.26em; text-transform:uppercase; text-align:center;
+  border-bottom:1px solid var(--border);
+}
+.mode-banner[data-mode="SAFE"]{
+  color:var(--accent); background:rgba(79,216,255,.07);
+  border-bottom-color:var(--accent-soft);
+}
+.mode-banner[data-mode="ASSISTED"]{
+  color:var(--accent); background:rgba(79,216,255,.12);
+  border-bottom-color:var(--accent);
+}
+.mode-banner[data-mode="AUTONOMOUS"]{
+  color:var(--gold); background:rgba(255,181,69,.12);
+  border-bottom-color:var(--gold); text-shadow:0 0 12px var(--gold-glow);
+}
+.mode-banner[data-mode="LOCKDOWN"]{
+  color:var(--red); background:rgba(255,93,93,.14);
+  border-bottom-color:var(--red); text-shadow:0 0 14px var(--red-glow);
+}
+
+.approval-list,.job-list,.sec-list,.console-feed{
+  list-style:none; display:flex; flex-direction:column; gap:5px;
+  margin-bottom:13px;
+}
+.approval-row{
+  padding:9px 11px; border:1px solid var(--gold);
+  background:rgba(255,181,69,.06); border-radius:var(--radius);
+  display:flex; flex-direction:column; gap:5px;
+}
+.approval-title{color:var(--bright)}
+.approval-facts{display:flex; gap:9px; flex-wrap:wrap; align-items:center}
+/* Impact leads, because "can I take this back" is the question a person is
+   actually answering and burying it under the tool name inverts that. */
+.impact{
+  font-size:9px; letter-spacing:.14em; text-transform:uppercase;
+  padding:2px 7px; border:1px solid var(--border); border-radius:var(--radius);
+}
+.impact-read{color:var(--muted)}
+.impact-write{color:var(--accent); border-color:var(--accent-soft)}
+.impact-external{color:var(--gold); border-color:rgba(255,181,69,.5)}
+.impact-destructive{
+  color:var(--red); border-color:var(--red); background:rgba(255,93,93,.08);
+}
+
+.job-row,.sec-row{
+  display:flex; align-items:center; gap:9px; flex-wrap:wrap;
+  padding:6px 9px; border-left:2px solid var(--border);
+  background:rgba(79,216,255,.02); font-size:11px;
+}
+.job-state{
+  font-size:9px; letter-spacing:.13em; text-transform:uppercase;
+  color:var(--muted);
+}
+.st-RUNNING{color:var(--accent)}
+.st-PAUSED{color:var(--gold)}
+.st-AWAITING_CONFIRMATION{color:var(--gold)}
+.st-FAILED{color:var(--red)}
+.job-title{color:var(--text); flex:1; min-width:120px}
+.job-actions{display:flex; gap:5px}
+.sec-label{color:var(--muted); flex:1}
+.sec-value{color:var(--bright)}
+
+.approval-list .empty-state,.job-list .empty-state,
+.sec-list .empty-state,.console-feed .empty-state{
+  padding:8px 4px; text-align:left;
+}
+.console-feed li{
+  display:flex; gap:9px; align-items:baseline; flex-wrap:wrap;
+  padding:4px 7px; border-left:2px solid var(--border); font-size:11px;
+}
+/* Loud events — an approval needed, a refusal, a stop — get a gold edge. A
+   scrolling feed is worst at exactly the things that most need noticing. */
+.console-feed li.loud{
+  border-left-color:var(--gold); background:rgba(255,181,69,.05);
+}
+.con-kind{
+  font-size:9px; letter-spacing:.11em; color:var(--accent-soft);
+  text-transform:uppercase; white-space:nowrap;
+}
+.con-summary{color:var(--text); flex:1; min-width:140px; word-break:break-word}
+.con-status{font-size:9px; letter-spacing:.11em}
