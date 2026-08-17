@@ -662,3 +662,30 @@ input:focus,select:focus{outline:none; border-color:var(--accent-soft)}
   .reactor-bay{flex-direction:column; align-items:flex-start}
   #statusReactor{width:140px; height:140px}
 }
+
+/* ── memory trust ─────────────────────────────────────────────────────── */
+/* Three states, and the distinction is the whole panel. The left edge carries
+   it as well as the tag, because a scanning eye reads position before it reads
+   a word — and there is no control anywhere that turns tainted into trusted. */
+
+.trust-list{list-style:none; display:flex; flex-direction:column; gap:6px;
+            margin-bottom:13px}
+.mem-trust-row{
+  display:flex; flex-direction:column; gap:5px;
+  padding:8px 10px; border-left:3px solid var(--border);
+  background:rgba(79,216,255,.02); font-size:11px;
+}
+.trust-tag{
+  font-size:9px; letter-spacing:.14em; text-transform:uppercase;
+  align-self:flex-start; padding:1px 6px; border:1px solid currentColor;
+}
+.trust-trusted{border-left-color:var(--accent-soft)}
+.trust-trusted .trust-tag{color:var(--accent)}
+/* Gold, like everything else on this page that needs a person. */
+.trust-proposed{border-left-color:var(--gold); background:rgba(255,181,69,.05)}
+.trust-proposed .trust-tag{color:var(--gold)}
+/* Red is not "broken" here — it is "came from outside". The strongest signal
+   available, because a laundered memory is the failure this system spent two
+   commits closing. */
+.trust-tainted{border-left-color:var(--red); background:rgba(255,93,93,.05)}
+.trust-tainted .trust-tag{color:var(--red)}

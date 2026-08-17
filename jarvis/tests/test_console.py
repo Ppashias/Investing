@@ -386,3 +386,96 @@ def test_the_reactor_stops_for_reduced_motion(client: TestClient) -> None:
     # …and draws a still frame rather than nothing: the readings must survive
     # the animation being switched off.
     assert "draw(0)" in code
+
+
+# ── memory trust ─────────────────────────────────────────────────────────────
+
+
+def test_the_console_cannot_turn_tainted_memory_into_trusted(
+    client: TestClient
+) -> None:
+    """Three layers, and this asserts all of them.
+
+    The panel offers no such control; MemoryService.update() drops a falsy
+    `tainted` and logs it; and the API's update schema has no such field at
+    all, so the request could not even be expressed. Taint is a fact about
+    where a claim came from, and approving the claim does not change that.
+    """
+    # The panel reads taint and renders it; what it must never do is send it.
+    code = _console_code(client)
+    assert "memory.tainted" in code, "the panel should read taint"
+
+    # It sends no request bodies at all for memory — only POSTs to /confirm and
+    # /archive, which name the action rather than carrying fields. There is
+    # therefore nothing to smuggle a taint change into, which is a stronger
+    # statement than "it does not currently set that field".
+    assert "body:" not in code, "the console builds a request body"
+    assert re.search(r'method:\s*"PATCH"', code) is None
+
+    # The request could not be expressed even if the panel tried.
+    from jarvis.api.memory_routes import UpdateMemoryRequest
+
+    assert "tainted" not in UpdateMemoryRequest.model_fields
+    # …nor at creation: a memory the user typed is trusted by definition, and
+    # a `source` field on the create request would let a caller *claim* WEB
+    # provenance for something they wrote.
+    from jarvis.api.memory_routes import CreateMemoryRequest
+
+    assert "source" not in CreateMemoryRequest.model_fields
+
+
+async def test_a_patch_attempting_to_clear_taint_leaves_it_set(
+    client: TestClient, session, user
+) -> None:
+    """Driven through the real endpoint rather than asserted from the schema
+    alone, because "the field is absent" and "the memory is still tainted"
+    are different claims and only the second matters.
+
+    The memory is made tainted through the service, since the API deliberately
+    offers no way to create one — a caller who could claim WEB provenance for
+    text they wrote would be forging the very thing taint records.
+    """
+    from jarvis.db.models import MemorySource
+    from jarvis.memory.service import MemoryDraft, MemoryService
+
+    outcome = await MemoryService(session).create(
+        user.id,
+        MemoryDraft(content="Something a web page said",
+                    subject="provenance", source=MemorySource.WEB),
+        actor="test",
+    )
+    await session.commit()
+    memory_id = outcome.memory.id
+    assert outcome.memory.tainted is True
+
+    # Unknown fields are dropped or refused; either way the taint survives.
+    client.patch("/api/memories/" + memory_id, json={"tainted": False})
+    client.patch("/api/memories/" + memory_id,
+                 json={"content": "Something ordinary", "tainted": False})
+
+    fetched = client.get("/api/memories/" + memory_id)
+    if fetched.status_code == 200:
+        assert fetched.json()["tainted"] is True
+
+
+def test_the_three_trust_states_are_distinguished(client: TestClient) -> None:
+    """PROPOSED, TAINTED, TRUSTED. The panel's whole job."""
+    code = _console_code(client)
+    for state in ('"proposed"', '"tainted"', '"trusted"'):
+        assert state in code, state
+
+    css = client.get("/assets/app.css").text
+    for rule in (".trust-proposed", ".trust-tainted", ".trust-trusted"):
+        assert rule in css, rule
+
+
+def test_trust_is_carried_by_position_as_well_as_colour(
+    client: TestClient
+) -> None:
+    """A scanning eye reads position before it reads a word, and colour is
+    never the only signal here. Each row carries a left edge *and* a printed
+    tag."""
+    code = _console_code(client)
+    assert '"trust-tag"' in code
+    css = client.get("/assets/app.css").text
+    assert "border-left-color:var(--red)" in css

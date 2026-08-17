@@ -358,6 +358,103 @@
   const observeBtn = $("console_observeBtn");
   if (observeBtn) observeBtn.addEventListener("click", observe);
 
+  /* ── memory ─────────────────────────────────────────────────────────────
+     Three states, and the distinction is the whole panel:
+
+       PROPOSED  JARVIS inferred it and is asking. Not in play yet.
+       TAINTED   it came from, or was extracted on a turn that read, something
+                 JARVIS did not author — a web page, a document, a note.
+       TRUSTED   everything else.
+
+     There is deliberately no control that turns a tainted memory into a
+     trusted one. The backend refuses it too — MemoryService.update() drops a
+     falsy `tainted` and logs, and the API's update schema has no such field at
+     all — so this is the third of three layers rather than the only one. Taint
+     is a fact about where a claim came from, and approving the claim does not
+     change where it came from. */
+
+  function trustOf(memory) {
+    if (memory.status === "PROPOSED") return "proposed";
+    return memory.tainted ? "tainted" : "trusted";
+  }
+
+  async function refreshMemory() {
+    if (!window.jarvisApi) return;
+    let data;
+    try {
+      data = await window.jarvisApi("/memories?limit=25");
+    } catch (_) {
+      return;
+    }
+    paintMemory(data.memories || []);
+  }
+
+  function paintMemory(memories) {
+    const list = $("trustList");
+    if (!list) return;
+    clear(list);
+
+    if (!memories.length) {
+      list.appendChild(node("li", "empty-state", "Nothing remembered yet."));
+      return;
+    }
+
+    // Proposed first, then tainted, then trusted. Ordering by what needs a
+    // decision rather than by recency: the panel exists to be acted on.
+    const rank = { proposed: 0, tainted: 1, trusted: 2 };
+    const sorted = memories.slice().sort(
+      (a, b) => rank[trustOf(a)] - rank[trustOf(b)]
+    );
+
+    for (const memory of sorted) {
+      const trust = trustOf(memory);
+      const row = node("li", "mem-trust-row trust-" + trust);
+      row.appendChild(node("span", "trust-tag", trust));
+      row.appendChild(node("span", "mem-text", memory.content));
+
+      const facts = node("div", "mem-facts");
+      facts.appendChild(node("span", "dim", memory.type));
+      facts.appendChild(node("span", "dim", "source " + memory.source));
+      facts.appendChild(node("span", "dim",
+                             "confidence " + memory.confidence_band));
+      // Provenance, so "why is this distrusted?" is answerable here rather
+      // than by replaying the turn it came from.
+      if (memory.meta && memory.meta.tainted_request_id) {
+        facts.appendChild(node("span", "dim",
+                               "from request " + memory.meta.tainted_request_id));
+      }
+      if (memory.provenance && memory.provenance.label) {
+        facts.appendChild(node("span", "dim", memory.provenance.label));
+      }
+      row.appendChild(facts);
+
+      const actions = node("div", "mem-actions");
+      if (memory.status === "PROPOSED") {
+        actions.appendChild(memoryButton("keep", memory.id, "confirm"));
+        actions.appendChild(memoryButton("reject", memory.id, "archive"));
+      } else {
+        actions.appendChild(memoryButton("forget", memory.id, "archive"));
+      }
+      row.appendChild(actions);
+      list.appendChild(row);
+    }
+  }
+
+  function memoryButton(label, memoryId, action) {
+    const button = node("button", "ghost small", label);
+    button.addEventListener("click", async () => {
+      if (!window.jarvisApi) return;
+      try {
+        await window.jarvisApi(
+          "/memories/" + encodeURIComponent(memoryId) + "/" + action,
+          { method: "POST" }
+        );
+      } catch (_) { /* the feed will show the refusal */ }
+      refreshMemory();
+    });
+    return button;
+  }
+
   /* ── the stream ─────────────────────────────────────────────────────────── */
 
   function onEvent(payload) {
@@ -376,6 +473,8 @@
       refreshSecurity();
     } else if (payload.event.indexOf("task.") === 0) {
       refreshJobs();
+    } else if (payload.event.indexOf("memory.") === 0) {
+      refreshMemory();
     }
   }
 
@@ -389,6 +488,7 @@
   document.addEventListener("jarvis:authenticated", () => {
     refreshJobs();
     refreshSecurity();
+    refreshMemory();
   });
 
   paintMode("SAFE", false);
