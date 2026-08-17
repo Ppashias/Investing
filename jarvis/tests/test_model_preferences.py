@@ -293,3 +293,47 @@ def test_a_smuggled_provider_field_is_refused_not_ignored(client) -> None:
     })
 
     assert response.status_code == 422
+
+
+# ── local models (Phase D) ───────────────────────────────────────────────────
+
+
+def test_a_local_runtime_offers_every_model_it_was_configured_with() -> None:
+    """Found by wiring Ollama up rather than by reading the code.
+
+    Only the *default* model was recorded, so an OpenAI-compatible provider
+    reported an empty `models` dict. Harmless for routing — the router falls
+    back to `default_model` — and not harmless for anything that asks a
+    provider what it offers. The console's picker does, so a machine running
+    Ollama got an empty dropdown and no way to reach the second model it had
+    pulled. That is precisely the setup somebody chooses when they do not want
+    to pay per token, which makes it the worst place for the list to be blank.
+    """
+    from jarvis.providers.registry import build_registry
+
+    settings = Settings(
+        environment="test",
+        openai_base_url="http://127.0.0.1:11434/v1",
+        openai_compat_models=["llama3.1", "qwen2.5"],
+    )
+    offered = preferences.selectable_models(build_registry(settings))
+
+    assert {m["id"] for m in offered} == {"llama3.1", "qwen2.5"}
+    assert all(m["runs_locally"] for m in offered)
+    assert all(m["input_price_per_mtok"] == 0.0 for m in offered), \
+        "a local model costs nothing per token and should sort first"
+
+
+def test_a_local_model_declares_no_context_window_rather_than_a_guess() -> None:
+    """`min_context_tokens` treats an undeclared window as "do not exclude".
+
+    Inventing a large one would let the constraint select a provider that then
+    truncates silently — a lie the model never mentions, and the hardest kind
+    to notice.
+    """
+    from jarvis.providers.registry import _declared_models
+
+    info = _declared_models(["llama3.1"])["llama3.1"]
+
+    assert info.context_window == 0
+    assert info.max_output_tokens == 0

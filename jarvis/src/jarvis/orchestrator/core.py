@@ -154,6 +154,33 @@ class Orchestrator:
             emergency_stop=getattr(self.computer, "emergency_stop", None),
         )
 
+    def tool_extras(
+        self, session: AsyncSession, *, project_id: str | None = None,
+        activity: ActivityService | None = None,
+    ) -> dict[str, Any]:
+        """Everything a tool handler may reach, assembled in one place.
+
+        Extracted when the MCP server arrived. Until then only ``ExecuteStage``
+        built this dict, and a second copy in the MCP path would have been a
+        second answer to "what can a tool touch" — the kind of split where one
+        side quietly loses the browser, or the audit service, and nothing fails
+        loudly. The same reasoning as ``_make_executor`` being a factory rather
+        than a constructor call at each call site.
+        """
+        return {
+            "embeddings": self.embeddings,
+            "project_id": project_id,
+            "computer": self.computer,
+            "browser": self.browser,
+            "background": self.background,
+            "agents": self._make_supervisor(session),
+            # The *same* ActivityService the executor writes its TOOL_CALL and
+            # PERMISSION_DECISION rows through, bound to this session. A tool
+            # keeping its own subject-specific audit — Obsidian does — needs to
+            # reach the existing recorder rather than start a second one.
+            "activity": activity or self._activity(session),
+        }
+
     def _make_supervisor(self, session: AsyncSession) -> Any:
         """A supervisor per request, like the executor.
 

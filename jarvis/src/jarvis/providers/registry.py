@@ -6,7 +6,7 @@ from jarvis.config import Settings, get_secret
 from jarvis.errors import ProviderNotConfiguredError
 from jarvis.logging import get_logger
 from jarvis.providers.anthropic_provider import AnthropicProvider
-from jarvis.providers.base import AIProvider, ProviderCapability
+from jarvis.providers.base import AIProvider, ModelInfo, ProviderCapability
 from jarvis.providers.openai_compat import OpenAICompatProvider, local_provider
 
 log = get_logger(__name__)
@@ -98,6 +98,12 @@ def build_registry(settings: Settings) -> ProviderRegistry:
                         if settings.openai_compat_models
                         else "local-model"
                     ),
+                    models=_declared_models(
+                        settings.openai_compat_models,
+                        capabilities=frozenset(
+                            {ProviderCapability.TEXT, ProviderCapability.STREAMING}
+                        ),
+                    ),
                 )
             )
         else:
@@ -110,6 +116,7 @@ def build_registry(settings: Settings) -> ProviderRegistry:
                         if settings.openai_compat_models
                         else "gpt-4o-mini"
                     ),
+                    models=_declared_models(settings.openai_compat_models),
                     timeout=settings.provider_timeout_seconds,
                 )
             )
@@ -124,3 +131,42 @@ def build_registry(settings: Settings) -> ProviderRegistry:
             ),
         )
     return registry
+
+
+def _declared_models(
+    names: list[str],
+    *,
+    capabilities: frozenset[ProviderCapability] | None = None,
+) -> dict[str, ModelInfo]:
+    """Turn the configured model names into a declared catalogue.
+
+    Only the *default* model used to be recorded, so an OpenAI-compatible
+    provider reported an empty ``models`` dict. Harmless for routing — the
+    router falls back to ``default_model`` — and not harmless for anything that
+    asks a provider what it offers. The console's model picker does, so a
+    machine running Ollama got an empty dropdown and no way to choose the second
+    model it had pulled.
+
+    The numbers are deliberately conservative placeholders. A local runtime does
+    not publish a context window over this API, and inventing a large one would
+    let ``min_context_tokens`` select a provider that then truncates silently —
+    a lie the model never mentions. Price is zero because it is: the electricity
+    is already being spent.
+    """
+    caps = capabilities or frozenset(
+        {ProviderCapability.TEXT, ProviderCapability.STREAMING,
+         ProviderCapability.TOOL_USE}
+    )
+    return {
+        name: ModelInfo(
+            id=name,
+            display_name=name,
+            # Zero rather than a guess. `_apply_constraints` treats an
+            # undeclared window as "do not exclude", which is the right
+            # behaviour for a runtime that cannot be asked.
+            context_window=0,
+            max_output_tokens=0,
+            capabilities=caps,
+        )
+        for name in names
+    }

@@ -60,6 +60,10 @@ browser = ["playwright>=1.40"]
 # separate from pywinauto inside the detection because screenshots and element
 # queries fail independently.
 windows = ["pywinauto>=0.6.8; sys_platform == 'win32'", "pillow>=10"]
+# JARVIS as an MCP server, so Claude Desktop can drive it on a subscription
+# rather than an API key. An extra for the same reason browser is: a JARVIS
+# that is never driven this way should not fail to start without it.
+mcp = ["mcp>=1.2"]
 dev = ["pytest>=8", "pytest-asyncio>=0.23", "anyio>=4"]
 
 [build-system]

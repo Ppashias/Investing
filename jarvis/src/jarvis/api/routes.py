@@ -18,6 +18,7 @@ from pydantic import BaseModel, ConfigDict, Field
 from jarvis.activity.service import ActivityService
 from jarvis.api.deps import AuthDep, CoreDep, SessionDep, UserDep
 from jarvis.confirmations.service import ConfirmationService
+from jarvis.db.base import new_id
 from jarvis.conversations.service import ConversationService
 from jarvis.db.models import (
     ActivityKind,
@@ -267,6 +268,104 @@ tools_router = APIRouter(prefix="/tools", tags=["tools"])
 @tools_router.get("")
 async def list_tools(core: CoreDep, _: AuthDep) -> dict[str, Any]:
     return {"tools": core.tools.describe(), "categories": core.tools.categories()}
+
+
+class ExecuteToolRequest(BaseModel):
+    """Arguments only. Nothing here can widen what the call is allowed to do.
+
+    Note the absence of ``user_id``, ``confirmed``, ``agent`` and ``tainted``.
+    Every one of them exists on ``ToolContext`` and every one is set by the
+    server: a caller who could pass ``confirmed=True`` would be able to
+    manufacture the evidence that a human approved the action, which is the
+    single most valuable field in the system to forge.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    arguments: dict[str, Any] = Field(default_factory=dict)
+    #: Optional provenance marker for a caller that knows it is relaying
+    #: untrusted content. It may only ever *raise* taint — see the handler.
+    tainted: bool = False
+
+
+@tools_router.post("/{tool_name}/execute")
+async def execute_tool(
+    tool_name: str,
+    body: ExecuteToolRequest,
+    core: CoreDep,
+    session: SessionDep,
+    user: UserDep,
+    _: AuthDep,
+) -> dict[str, Any]:
+    """Run one tool through the same chokepoint a model's call goes through.
+
+    Added for the MCP server (Phase D), and deliberately not a shortcut for
+    it. The executor, the permission engine, the confirmation service, the
+    emergency stop and the audit rows are the orchestrator's own — obtained
+    from ``core.orchestrator`` rather than rebuilt here, because a second
+    assembly is a second security posture, and the weaker one is always the
+    one nobody reads.
+
+    What this endpoint does *not* do is the point of it: it does not decide
+    anything. A tool needing confirmation returns 409 with the confirmation id
+    and stays unexecuted, exactly as a mid-turn suspension does. The caller —
+    Claude Desktop, over MCP — is then in the same position as the model: it
+    has been told a human must answer, and it cannot answer on their behalf.
+    """
+    if not core.tools.has(tool_name):
+        raise HTTPException(status.HTTP_404_NOT_FOUND, f"Unknown tool '{tool_name}'")
+
+    from jarvis.errors import ConfirmationRequiredError, PermissionDeniedError
+    from jarvis.tools.base import ToolCall, ToolContext
+
+    orchestrator = core.orchestrator
+    executor = orchestrator._make_executor(session)
+    ctx = ToolContext(
+        user_id=user.id,
+        session=session,
+        request_id=new_id("req"),
+        # Taint is a floor the caller may raise and never lower. An MCP client
+        # relaying a web page can say so; nothing it sends can declare content
+        # trustworthy, which would be the laundering path this codebase has
+        # closed four times already.
+        tainted=bool(body.tainted),
+        extras=orchestrator.tool_extras(session),
+    )
+
+    try:
+        outcome = await executor.execute(
+            ToolCall(id=new_id("call"), name=tool_name, arguments=body.arguments),
+            ctx,
+        )
+    except ConfirmationRequiredError as exc:
+        await session.commit()  # the confirmation row must survive the refusal
+        raise HTTPException(
+            status.HTTP_409_CONFLICT,
+            {
+                "reason": "confirmation_required",
+                "confirmation_id": (exc.details or {}).get("confirmation_id"),
+                "message": exc.user_message,
+            },
+        ) from exc
+    except PermissionDeniedError as exc:
+        await session.commit()  # …and so must the denial's audit row
+        raise HTTPException(
+            status.HTTP_403_FORBIDDEN,
+            {"reason": "denied", "message": exc.user_message},
+        ) from exc
+
+    await session.commit()
+    return {
+        "tool": tool_name,
+        "content": outcome.result.content,
+        "is_error": outcome.result.is_error,
+        # Travels with the result so a caller cannot present page-authored
+        # text as JARVIS's own. Claude Desktop shows it; the next call that
+        # relays it should set `tainted`.
+        "tainted": outcome.result.tainted,
+        "decision": outcome.decision.value if outcome.decision else None,
+        "duration_ms": outcome.duration_ms,
+    }
 
 
 @tools_router.patch("/{tool_name}")

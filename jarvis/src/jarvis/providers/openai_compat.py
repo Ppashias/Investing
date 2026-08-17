@@ -470,6 +470,7 @@ def local_provider(
     capabilities: frozenset[ProviderCapability] = frozenset(
         {ProviderCapability.TEXT, ProviderCapability.STREAMING}
     ),
+    models: dict[str, ModelInfo] | None = None,
 ) -> OpenAICompatProvider:
     """Factory for a local runtime.
 
@@ -484,5 +485,6 @@ def local_provider(
         api_key=None,
         default_model=default_model,
         capabilities=capabilities,
+        models=models,
         requires_api_key=False,
     )
