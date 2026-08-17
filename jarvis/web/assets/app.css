@@ -1,14 +1,71 @@
-/* JARVIS command center.
-   Palette and typography are carried over from the Portfolio Nebula dashboard
-   so the two feel like one system — same variables, same dark-only scheme,
-   same monospace stack. */
+/* JARVIS — command center.
+
+   The Phase 1 stylesheet carried over Portfolio Nebula's palette so the two
+   dashboards felt like one system. That was the right call then and is the
+   wrong one now: this is not a portfolio widget, it is the interface to
+   something that can drive a browser, read a vault and operate a machine, and
+   it should read as an instrument rather than as a web page.
+
+   ## The reference, and where it is deliberately disobeyed
+
+   The look is the Iron Man HUD: arc-reactor cyan on near-black, repulsor gold
+   for anything that needs a human, hairline rules, corner brackets, uppercase
+   letterspaced labels, a faint scan.
+
+   Three places the fiction is ignored on purpose, because a real instrument has
+   to be usable:
+
+   * **Body text is not glowing cyan.** Film HUDs are unreadable by design —
+     they are set dressing shot for two seconds. Long-form text here is a calm
+     near-white; the cyan is reserved for chrome, state and emphasis.
+   * **Motion is decorative only.** Nothing that conveys information moves. A
+     reader must never have to wait for an animation to know what happened.
+   * **Nothing depends on colour alone.** Every state that matters carries a
+     word as well as a hue, because the whole point of a confirmation is that
+     it is understood.
+
+   ## Contrast
+
+   Body text sits at roughly 12:1 on the page background, and the dimmest
+   supporting text at about 5:1 — above WCAG AA for its size. The glow is a
+   shadow, never the thing being read; removing every shadow in this file would
+   change how it feels and not whether it can be read.
+
+   Structure, class names and behaviour are unchanged. This file is the look. */
 
 :root{
   color-scheme: dark;
-  --bg:#0a0e16; --card:#0d1117; --sunk:#05080f; --border:#1e2633;
-  --text:#c9d1d9; --bright:#e6edf3; --muted:#8aa0c8; --dim:#5a6b8c;
-  --green:#3fb950; --red:#f85149; --blue:#4b73d2; --gold:#ffc400;
-  --accent:#3fa2ff;
+
+  /* ── ground ──────────────────────────────────────────────────────────── */
+  --bg:#03060c;            /* near-black, blue cast rather than neutral */
+  --bg-lift:#060b14;
+  --card:#070d18;
+  --sunk:#02050a;
+  --border:#12293d;        /* hairline, reads as drawn rather than as a box */
+  --border-hot:#1d4c6e;
+
+  /* ── ink ─────────────────────────────────────────────────────────────── */
+  --text:#c6dbe8;
+  --bright:#eaf6ff;
+  --muted:#7fa8c4;
+  --dim:#4d7590;
+
+  /* ── the reactor ─────────────────────────────────────────────────────── */
+  --accent:#4fd8ff;
+  --accent-soft:#2a9fc4;
+  --accent-glow:rgba(79,216,255,.45);
+  --blue:#4fd8ff;
+
+  /* ── repulsor gold: anything awaiting a human ────────────────────────── */
+  --gold:#ffb545;
+  --gold-glow:rgba(255,181,69,.35);
+
+  --green:#5ce6a8;
+  --red:#ff5d5d;
+  --red-glow:rgba(255,93,93,.4);
+
+  --radius:2px;            /* HUDs are drawn, not rounded */
+  --hair:1px solid var(--border);
 }
 
 *{margin:0;padding:0;box-sizing:border-box;-webkit-tap-highlight-color:transparent}
@@ -20,384 +77,407 @@
    set. Every overlay in this page is display:flex, so without this line the
    confirmation dialog and the auth gate are permanently visible. */
 [hidden]{display:none !important}
+
 html,body{height:100%}
+
 body{
   background:var(--bg); color:var(--text);
   font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;
-  font-size:13px; line-height:1.55;
+  font-size:13px; line-height:1.6;
   display:flex; flex-direction:column;
   padding-top:env(safe-area-inset-top);
   overscroll-behavior:none;
+  position:relative;
 }
-button{font-family:inherit;font-size:12px;cursor:pointer}
-code{background:var(--sunk);padding:1px 4px;border-radius:4px;color:var(--muted)}
 
-/* ── top bar ─────────────────────────────────────────────────────────── */
+/* The field the whole interface sits on. Two layers: a slow radial bloom from
+   the reactor, and a grid that is almost subliminal — visible enough to read
+   as an instrument surface, faint enough never to compete with text. */
+body::before{
+  content:""; position:fixed; inset:0; z-index:0; pointer-events:none;
+  background:
+    radial-gradient(1100px 620px at 50% -10%, rgba(79,216,255,.10), transparent 62%),
+    radial-gradient(760px 520px at 100% 100%, rgba(42,159,196,.06), transparent 60%),
+    linear-gradient(rgba(79,216,255,.028) 1px, transparent 1px) 0 0/100% 32px,
+    linear-gradient(90deg, rgba(79,216,255,.028) 1px, transparent 1px) 0 0/32px 100%;
+}
+
+/* The scan. Purely decorative, and the first thing to go under
+   prefers-reduced-motion — a moving band across the whole page is exactly the
+   sort of thing that makes some people ill. */
+body::after{
+  content:""; position:fixed; inset:0; z-index:1; pointer-events:none;
+  background:linear-gradient(rgba(79,216,255,.055), transparent 42%);
+  height:180px; animation:scan 7.5s linear infinite; opacity:.5;
+}
+@keyframes scan{
+  0%{transform:translateY(-190px)} 100%{transform:translateY(100vh)}
+}
+
+body > *{position:relative; z-index:2}
+
+/* ── type ─────────────────────────────────────────────────────────────── */
+
+h1,h2,h3,h4{
+  font-weight:600; letter-spacing:.11em; text-transform:uppercase;
+  color:var(--bright);
+}
+h3{font-size:11px}
+h4{font-size:10px; color:var(--muted)}
+code{
+  font-family:inherit; background:var(--sunk); color:var(--accent);
+  padding:1px 5px; border:var(--hair); border-radius:var(--radius);
+}
+.dim{color:var(--dim)}
+.small{font-size:11px}
+.warn{color:var(--gold)}
+.danger{color:var(--red)}
+
+/* ── the bracket, used everywhere a panel needs an edge ───────────────── */
+
+.panel, .rail, .memory-card, .auth-card, .modal-card, .obsidian-block,
+.comp-block, .system-info{
+  position:relative;
+  background:
+    linear-gradient(var(--card),var(--card)) padding-box,
+    linear-gradient(160deg, rgba(79,216,255,.30), rgba(79,216,255,.04) 45%,
+                    rgba(79,216,255,.22)) border-box;
+  border:1px solid transparent;
+  border-radius:var(--radius);
+}
+/* Corner ticks. Two pseudo-elements give the top-left and bottom-right of a
+   reticle; the other two corners are deliberately left open, because a fully
+   closed frame reads as a card and the point is that it reads as a cut-out. */
+.panel::before, .rail::before, .modal-card::before, .auth-card::before{
+  content:""; position:absolute; top:-1px; left:-1px; width:14px; height:14px;
+  border-top:2px solid var(--accent); border-left:2px solid var(--accent);
+  opacity:.85; pointer-events:none;
+}
+.panel::after, .rail::after, .modal-card::after, .auth-card::after{
+  content:""; position:absolute; bottom:-1px; right:-1px; width:14px; height:14px;
+  border-bottom:2px solid var(--accent); border-right:2px solid var(--accent);
+  opacity:.85; pointer-events:none;
+}
+
+/* ── topbar ───────────────────────────────────────────────────────────── */
+
 .topbar{
-  display:flex; justify-content:space-between; align-items:center;
-  padding:10px 14px; border-bottom:1px solid var(--border); flex:0 0 auto;
+  display:flex; align-items:center; gap:14px;
+  padding:10px 16px;
+  border-bottom:1px solid var(--border);
+  background:linear-gradient(180deg, rgba(6,11,20,.96), rgba(3,6,12,.82));
+  backdrop-filter:blur(8px);
 }
-.brand{font-size:14px;font-weight:700;color:var(--bright);letter-spacing:.5px}
-.brand em{font-style:normal;color:var(--accent)}
-.topbar-status{display:flex;gap:8px;align-items:center}
+.brand{
+  display:flex; align-items:center; gap:10px;
+  font-size:15px; font-weight:700; letter-spacing:.34em;
+  color:var(--bright); text-transform:uppercase;
+  text-shadow:0 0 14px var(--accent-glow);
+}
+/* The reactor. A canvas draws the live one; this is the ring it sits in, so
+   the mark is still present and still centred when the canvas is absent —
+   scripts fail, and a brand that vanishes with them looks broken. */
+#reactor{width:22px; height:22px; display:block; filter:drop-shadow(0 0 6px var(--accent-glow))}
+
+.topbar-status{margin-left:auto; display:flex; align-items:center; gap:8px}
 .badge{
-  font-size:10px;font-weight:700;letter-spacing:.6px;padding:3px 8px;
-  border:1px solid var(--border);border-radius:20px;color:var(--dim);
+  font-size:10px; letter-spacing:.14em; text-transform:uppercase;
+  padding:3px 9px; border:1px solid var(--border);
+  border-radius:var(--radius); color:var(--muted);
+  background:rgba(79,216,255,.05);
 }
-.badge.ok{color:var(--green);border-color:#1c4128}
-.badge.warn{color:var(--gold);border-color:#4a3a00}
-.badge.bad{color:var(--red);border-color:#4a1f1c}
+.badge.ok{
+  color:var(--accent); border-color:var(--accent-soft);
+  box-shadow:0 0 12px rgba(79,216,255,.18) inset;
+}
+.badge.bad{color:var(--red); border-color:rgba(255,93,93,.5)}
 
-/* ── layout ──────────────────────────────────────────────────────────── */
+/* ── layout ───────────────────────────────────────────────────────────── */
+
 .layout{
-  flex:1; display:grid; grid-template-columns:minmax(0,1fr) 340px;
-  gap:10px; padding:10px; min-height:0;
+  flex:1; display:grid; grid-template-columns:minmax(0,1fr) 380px;
+  gap:12px; padding:12px; min-height:0;
 }
-@media (max-width:900px){
-  .layout{grid-template-columns:1fr; grid-template-rows:minmax(0,1fr) 260px}
-}
-.panel{
-  background:var(--card); border:1px solid var(--border); border-radius:10px;
-  display:flex; flex-direction:column; min-height:0; overflow:hidden;
-}
+.panel{display:flex; flex-direction:column; min-height:0; overflow:hidden}
 .panel-head{
-  display:flex;justify-content:space-between;align-items:center;
-  padding:10px 14px;border-bottom:1px solid var(--border);flex:0 0 auto;
+  display:flex; align-items:center; gap:10px;
+  padding:9px 13px; border-bottom:1px solid var(--border);
+  background:rgba(79,216,255,.035);
 }
-.panel-head h3{font-size:13px;font-weight:600;color:var(--bright)}
-.panel-head small{color:var(--dim);font-weight:400;font-size:11px;margin-left:6px}
-
-/* ── buttons ─────────────────────────────────────────────────────────── */
-.primary,.ghost,.danger{
-  border-radius:8px;padding:7px 13px;font-weight:600;border:1px solid var(--border);
-  background:#161d29;color:var(--muted);transition:border-color .12s,color .12s;
+/* The rail head sits *inside* a padded tab panel, so giving it the panel-head
+   treatment made it read as a second nested card floating in the pane. It is a
+   caption for the list below it; a rule underneath is all it needs. */
+.rail-head{
+  display:flex; align-items:center; gap:10px;
+  padding:0 0 8px; margin-bottom:9px;
+  border-bottom:1px solid var(--border);
 }
-.primary{color:var(--bright);border-color:#2c4a6e;background:#13223a}
-.primary:hover{border-color:var(--accent)}
-.ghost:hover{color:var(--text);border-color:#2c3a52}
-.danger{color:#ffd9d6;border-color:#5c2420;background:#2a1512}
-.danger:hover{border-color:var(--red)}
-.small{padding:3px 8px;font-size:10.5px}
-button:disabled{opacity:.45;cursor:not-allowed}
+.panel-head h3 small{
+  margin-left:8px; color:var(--dim); text-transform:none; letter-spacing:0;
+  font-weight:400;
+}
 
-/* ── messages ────────────────────────────────────────────────────────── */
-.messages{flex:1;overflow-y:auto;padding:14px;display:flex;flex-direction:column;gap:12px}
-.empty-state{margin:auto;text-align:center;color:var(--dim);max-width:420px}
-.empty-state p{color:var(--muted);font-size:14px;margin-bottom:6px}
-.empty-state span{font-size:11px;line-height:1.7}
+/* ── conversation ─────────────────────────────────────────────────────── */
 
-.msg{display:flex;flex-direction:column;gap:4px;max-width:82%}
-.msg.user{align-self:flex-end;align-items:flex-end}
-.msg.assistant{align-self:flex-start}
-.msg-role{font-size:9.5px;letter-spacing:1.2px;font-weight:700;color:var(--dim)}
+.messages{flex:1; overflow-y:auto; padding:16px; display:flex;
+          flex-direction:column; gap:16px; scrollbar-width:thin}
+.msg{display:flex; flex-direction:column; gap:5px; max-width:none}
+.msg-meta{display:flex; align-items:baseline; gap:9px}
+.msg-role{
+  font-size:10px; letter-spacing:.2em; text-transform:uppercase;
+  color:var(--accent); font-weight:700;
+}
+.msg[data-role="user"] .msg-role{color:var(--gold)}
 .msg-body{
-  background:#101725;border:1px solid var(--border);border-radius:10px;
-  padding:9px 12px;white-space:pre-wrap;word-break:break-word;color:var(--text);
+  white-space:pre-wrap; word-break:break-word;
+  border-left:2px solid var(--border); padding-left:12px;
+  color:var(--text);
 }
-.msg.user .msg-body{background:#13223a;border-color:#2c4a6e;color:var(--bright)}
-.msg.error .msg-body{background:#2a1512;border-color:#5c2420;color:#ffd9d6}
-.msg-meta{font-size:10px;color:var(--dim)}
+.msg[data-role="assistant"] .msg-body{border-left-color:var(--accent-soft)}
+.msg[data-role="user"] .msg-body{border-left-color:rgba(255,181,69,.45)}
 
-/* tool call chips inside a turn */
-.toolchips{display:flex;flex-wrap:wrap;gap:5px;margin-top:2px}
-.toolchip{
-  font-size:10px;padding:2px 7px;border-radius:12px;
-  border:1px solid #2c3a52;background:var(--sunk);color:var(--muted);
-}
-.toolchip.err{border-color:#5c2420;color:#ff9d96}
-
-/* ── thinking indicator ──────────────────────────────────────────────── */
 .thinking{
-  display:flex;align-items:center;gap:5px;padding:0 16px 8px;
-  font-size:11px;color:var(--dim);flex:0 0 auto;
+  display:flex; align-items:center; gap:10px;
+  padding:9px 16px; border-top:1px solid var(--border);
+  color:var(--accent); font-size:11px;
+  letter-spacing:.14em; text-transform:uppercase;
 }
-.thinking .dot{
-  width:5px;height:5px;border-radius:50%;background:var(--accent);
-  animation:pulse 1.2s infinite ease-in-out;
+/* Three ticks that fill in sequence. Decorative — the label beside it already
+   says what is happening, so nothing is lost when motion is off. */
+.thinking .band{
+  width:52px; height:2px; background:var(--sunk); overflow:hidden; position:relative;
 }
-.thinking .dot:nth-child(2){animation-delay:.15s}
-.thinking .dot:nth-child(3){animation-delay:.3s;margin-right:5px}
-@keyframes pulse{0%,80%,100%{opacity:.25}40%{opacity:1}}
+.thinking .band::after{
+  content:""; position:absolute; inset:0; width:34%;
+  background:linear-gradient(90deg,transparent,var(--accent),transparent);
+  animation:sweep 1.15s ease-in-out infinite;
+}
+@keyframes sweep{0%{transform:translateX(-120%)}100%{transform:translateX(320%)}}
 
-/* ── composer ────────────────────────────────────────────────────────── */
 .composer{
-  display:flex;gap:8px;padding:10px;border-top:1px solid var(--border);
-  flex:0 0 auto;align-items:flex-end;
+  display:flex; gap:9px; padding:11px; border-top:1px solid var(--border);
+  background:rgba(2,5,10,.6);
 }
 .composer textarea{
-  flex:1;resize:none;max-height:180px;background:var(--sunk);color:var(--text);
-  border:1px solid var(--border);border-radius:8px;padding:9px 11px;
-  font-family:inherit;font-size:13px;line-height:1.5;
+  flex:1; resize:none; background:var(--sunk); color:var(--bright);
+  border:1px solid var(--border); border-radius:var(--radius);
+  padding:9px 11px; font:inherit; max-height:190px;
 }
-.composer textarea:focus{outline:none;border-color:#2c4a6e}
+.composer textarea:focus{
+  outline:none; border-color:var(--accent-soft);
+  box-shadow:0 0 0 1px var(--accent-soft), 0 0 18px rgba(79,216,255,.12);
+}
+.composer textarea::placeholder{color:var(--dim)}
 
-/* ── right rail ──────────────────────────────────────────────────────── */
-.rail{min-height:0}
-/* Seven tabs no longer fit a 340px rail. Scroll rather than shrink: at
-   font-size 10 the labels stop being readable, and a tab nobody can read is
-   worse than one they have to scroll to. */
-.tabs{
-  display:flex;border-bottom:1px solid var(--border);flex:0 0 auto;
-  overflow-x:auto;scrollbar-width:none;
+/* ── controls ─────────────────────────────────────────────────────────── */
+
+button{
+  font:inherit; cursor:pointer; border-radius:var(--radius);
+  letter-spacing:.1em; text-transform:uppercase; font-size:11px;
+  padding:7px 15px; transition:box-shadow .16s, border-color .16s, color .16s;
 }
-.tabs::-webkit-scrollbar{display:none}
+.primary{
+  background:linear-gradient(180deg, rgba(79,216,255,.16), rgba(79,216,255,.05));
+  border:1px solid var(--accent-soft); color:var(--bright);
+  box-shadow:0 0 14px rgba(79,216,255,.12) inset;
+}
+.primary:hover{box-shadow:0 0 18px rgba(79,216,255,.30), 0 0 14px rgba(79,216,255,.2) inset}
+.ghost{background:transparent; border:1px solid var(--border); color:var(--muted)}
+.ghost:hover{border-color:var(--accent-soft); color:var(--accent)}
+.danger{
+  background:rgba(255,93,93,.08); border:1px solid rgba(255,93,93,.45);
+  color:var(--red);
+}
+.danger:hover{box-shadow:0 0 16px var(--red-glow)}
+button:disabled{opacity:.4; cursor:not-allowed; box-shadow:none}
+
+input,select,textarea{
+  background:var(--sunk); color:var(--text); font:inherit;
+  border:1px solid var(--border); border-radius:var(--radius); padding:6px 9px;
+}
+input:focus,select:focus{outline:none; border-color:var(--accent-soft)}
+
+/* ── rail ─────────────────────────────────────────────────────────────── */
+
+.rail{display:flex; flex-direction:column; min-height:0; overflow:hidden}
+/* Wrap rather than scroll. A horizontally scrolling tab strip hides the tabs
+   past the edge with no affordance saying so — the first render of this
+   stylesheet clipped "TASKS" and nothing indicated there was more. Two short
+   rows cost 22px and lose nothing. */
+.tabs{display:flex; flex-wrap:wrap; gap:2px; padding:7px 7px 0;
+      border-bottom:1px solid var(--border)}
 .tab{
-  flex:0 0 auto;background:none;border:none;border-bottom:2px solid transparent;
-  padding:9px 9px;color:var(--dim);font-weight:600;font-size:11px;
-  white-space:nowrap;
+  background:transparent; border:1px solid transparent; border-bottom:none;
+  color:var(--dim); padding:5px 9px; white-space:nowrap; font-size:10px;
+  letter-spacing:.08em;
 }
-.tab.sel{color:var(--bright);border-bottom-color:var(--accent)}
-.tabpanel{flex:1;overflow-y:auto;min-height:0}
-.rail-head{
-  display:flex;justify-content:space-between;align-items:center;
-  padding:8px 12px;border-bottom:1px solid var(--border);
-  position:sticky;top:0;background:var(--card);z-index:1;
+.tab[aria-selected="true"], .tab.active{
+  color:var(--accent); border-color:var(--border);
+  background:rgba(79,216,255,.07);
+  box-shadow:0 -2px 0 var(--accent) inset;
 }
-.dim{color:var(--dim);font-size:10.5px}
-
-.activity-list,.task-list,.tool-list{list-style:none}
-.activity-list li,.task-list li,.tool-list li{
-  padding:8px 12px;border-bottom:1px solid #161d29;font-size:11px;
-}
-.activity-list li{display:flex;gap:8px;align-items:baseline}
-.act-kind{
-  font-size:9px;font-weight:700;letter-spacing:.5px;color:var(--dim);
-  flex:0 0 auto;min-width:78px;
-}
-.act-kind.ok{color:var(--green)} .act-kind.bad{color:var(--red)}
-.act-kind.tool{color:var(--gold)} .act-kind.model{color:var(--accent)}
-.act-summary{flex:1;color:var(--muted);word-break:break-word}
-.act-time{color:var(--dim);font-size:9.5px;flex:0 0 auto}
-
-.task-row{display:flex;justify-content:space-between;gap:8px;align-items:baseline}
-.task-title{color:var(--text);word-break:break-word}
-.task-status{font-size:9px;font-weight:700;letter-spacing:.5px;flex:0 0 auto}
-.st-TODO{color:var(--dim)} .st-IN_PROGRESS{color:var(--accent)}
-.st-COMPLETED{color:var(--green)} .st-FAILED{color:var(--red)}
-.st-CANCELLED{color:var(--dim)} .st-BLOCKED{color:var(--gold)}
-.st-WAITING{color:var(--gold)}
-.task-meta{color:var(--dim);font-size:10px;margin-top:2px}
-
-.tool-row{display:flex;justify-content:space-between;gap:8px;align-items:baseline}
-.tool-name{color:var(--text);font-weight:600}
-.tool-cap{font-size:9px;font-weight:700;letter-spacing:.5px;color:var(--dim)}
-.cap-WRITE{color:var(--gold)} .cap-EXECUTE{color:#ff9d96}
-.cap-SENSITIVE_ACTION{color:var(--red)}
-.tool-desc{color:var(--dim);font-size:10px;margin-top:3px;line-height:1.5}
-.tool-off{opacity:.45}
-
-.system-info{padding:12px;font-size:11px;line-height:1.8;color:var(--muted)}
-.system-info h4{
-  color:var(--bright);font-size:10px;letter-spacing:1px;margin:12px 0 4px;
-  font-weight:700;
-}
-.system-info h4:first-child{margin-top:0}
-.system-info .kv{display:flex;justify-content:space-between;gap:10px}
-.system-info .kv span:last-child{color:var(--text)}
-
-/* ── auth gate ───────────────────────────────────────────────────────── */
-.auth-gate{
-  position:fixed;inset:0;z-index:60;background:rgba(5,8,15,.94);
-  display:flex;align-items:center;justify-content:center;padding:20px;
-}
-.auth-card{
-  background:var(--card);border:1px solid var(--border);border-radius:12px;
-  padding:22px;max-width:430px;width:100%;
-}
-.auth-card h2{font-size:15px;color:var(--bright);margin-bottom:8px}
-.auth-card p{font-size:11.5px;color:var(--dim);line-height:1.7;margin-bottom:14px}
-.auth-card input{
-  width:100%;background:var(--sunk);color:var(--text);border:1px solid var(--border);
-  border-radius:8px;padding:9px 11px;font-family:inherit;font-size:13px;
-  margin-bottom:10px;
-}
-.auth-card input:focus{outline:none;border-color:#2c4a6e}
-.auth-error{color:var(--red)!important;margin:10px 0 0!important}
-
-/* ── modal ───────────────────────────────────────────────────────────── */
-.modal{
-  position:fixed;inset:0;z-index:70;background:rgba(5,8,15,.9);
-  display:flex;align-items:center;justify-content:center;padding:20px;
-}
-.modal-card{
-  background:var(--card);border:1px solid #5c2420;border-radius:12px;
-  padding:20px;max-width:520px;width:100%;
-}
-.modal-head{display:flex;align-items:center;gap:10px;margin-bottom:10px}
-.modal-head h3{font-size:14px;color:var(--bright)}
-.risk{
-  font-size:9px;font-weight:700;letter-spacing:.8px;padding:3px 8px;
-  border-radius:20px;border:1px solid var(--border);color:var(--dim);
-}
-.risk.MEDIUM{color:var(--gold);border-color:#4a3a00}
-.risk.HIGH,.risk.CRITICAL{color:var(--red);border-color:#5c2420}
-.modal-body{font-size:12px;color:var(--muted);line-height:1.7;white-space:pre-wrap}
-.modal-args{
-  background:var(--sunk);border:1px solid var(--border);border-radius:8px;
-  padding:9px 11px;margin:10px 0;font-size:10.5px;color:var(--muted);
-  overflow-x:auto;white-space:pre;
-}
-.warn{color:var(--gold);font-size:11.5px;margin-bottom:12px}
-.modal-actions{display:flex;justify-content:flex-end;gap:8px;margin-top:14px}
-
-/* scrollbars */
-::-webkit-scrollbar{width:9px;height:9px}
-::-webkit-scrollbar-track{background:transparent}
-::-webkit-scrollbar-thumb{background:#1e2633;border-radius:5px}
-::-webkit-scrollbar-thumb:hover{background:#2c3a52}
-
-/* ── memory & knowledge rails ────────────────────────────────────────── */
-.rail-filters{display:flex;gap:6px;padding:8px 12px;border-bottom:1px solid var(--border)}
-.rail-filters input,.rail-filters select{
-  flex:1;min-width:0;background:var(--sunk);color:var(--text);
-  border:1px solid var(--border);border-radius:7px;padding:5px 8px;
-  font-family:inherit;font-size:11px;
-}
-.rail-filters input:focus,.rail-filters select:focus{outline:none;border-color:#2c4a6e}
+.tabpanel{flex:1; overflow-y:auto; padding:11px; min-height:0; scrollbar-width:thin}
+.rail-filters{display:flex; gap:7px; margin-bottom:9px}
+.rail-filters input,.rail-filters select{flex:1; min-width:0}
 .rail-notice{
-  margin:8px 12px;padding:7px 9px;border-radius:7px;font-size:10.5px;line-height:1.6;
-  background:#241d05;border:1px solid #4a3a00;color:var(--gold);
+  color:var(--gold); font-size:11px; padding:7px 9px; margin-bottom:9px;
+  border:1px solid rgba(255,181,69,.3); background:rgba(255,181,69,.05);
+  border-radius:var(--radius);
+}
+.empty-state{color:var(--dim); text-align:center; padding:26px 12px; font-size:11px}
+
+/* ── activity ─────────────────────────────────────────────────────────── */
+
+.activity-list,.memory-list,.source-list,.scope-list,.audit-list,
+.mem-history-list{list-style:none; display:flex; flex-direction:column; gap:5px}
+.activity-list li{
+  display:grid; grid-template-columns:52px 1fr; gap:9px;
+  padding:5px 7px; border-left:2px solid var(--border);
+  background:rgba(79,216,255,.02); font-size:11px;
+}
+.act-time{color:var(--dim)}
+.act-kind{
+  font-size:9px; letter-spacing:.13em; text-transform:uppercase;
+  color:var(--accent-soft);
+}
+.act-summary{color:var(--text); word-break:break-word}
+
+/* Outcome colours. Each is paired with the word itself in the markup, so the
+   hue is reinforcement rather than the only signal. */
+.ao-OK,.ao-SUCCEEDED,.ao-RESOLVED{color:var(--green)}
+.ao-FAILED,.ao-ERROR,.ao-TIMED_OUT{color:var(--red)}
+.ao-AWAITING_CONFIRMATION{color:var(--gold)}
+
+/* ── memory / knowledge / tasks ───────────────────────────────────────── */
+
+.memory-card{padding:9px 11px; display:flex; flex-direction:column; gap:6px}
+.mem-top,.audit-top,.src-row,.task-row,.tool-row{
+  display:flex; align-items:center; gap:8px; flex-wrap:wrap;
+}
+.mem-kind,.audit-kind,.tool-cap,.doc-status,.task-status,.src-state{
+  font-size:9px; letter-spacing:.13em; text-transform:uppercase;
+  padding:2px 7px; border:1px solid var(--border); border-radius:var(--radius);
+  color:var(--muted);
+}
+.mem-text,.audit-meta,.doc-title,.task-title,.tool-name{color:var(--text)}
+.mem-meta,.doc-meta,.task-meta,.tool-desc,.audit-meta{color:var(--dim); font-size:11px}
+.mem-flag{color:var(--gold); font-size:10px; letter-spacing:.1em}
+.mem-actions,.obs-actions,.modal-actions{display:flex; gap:7px; flex-wrap:wrap}
+.mem-facts{display:flex; gap:11px; flex-wrap:wrap; font-size:11px; color:var(--dim)}
+.mem-edit textarea{width:100%}
+
+.st-PROPOSED{color:var(--gold)}
+.st-COMPLETED{color:var(--green)}
+.st-TODO,.st-WAITING{color:var(--muted)}
+.st-CANCELLED,.st-SUPERSEDED{color:var(--dim); text-decoration:line-through}
+.ds-INDEXED{color:var(--green)}
+.ds-REGISTERED{color:var(--muted)}
+
+.risk{font-size:9px; letter-spacing:.13em; text-transform:uppercase}
+.risk-MEDIUM{color:var(--gold)}
+.risk-HIGH{color:var(--red)}
+.cap-WRITE{color:var(--accent)}
+.cap-SENSITIVE_ACTION{color:var(--red)}
+.tool-off{opacity:.42}
+
+.toolchips{display:flex; gap:5px; flex-wrap:wrap; margin-top:5px}
+.toolchip{
+  font-size:9px; letter-spacing:.1em; text-transform:uppercase;
+  padding:2px 7px; border:1px solid var(--accent-soft);
+  color:var(--accent); background:rgba(79,216,255,.07);
+  border-radius:var(--radius);
 }
 
-.memory-list,.doc-list,.source-list{list-style:none}
-.memory-list li,.doc-list li,.source-list li{
-  padding:8px 12px;border-bottom:1px solid #161d29;font-size:11px;cursor:pointer;
+/* ── overlays ─────────────────────────────────────────────────────────── */
+
+.auth-gate,.modal{
+  position:fixed; inset:0; z-index:60; display:flex;
+  align-items:center; justify-content:center; padding:20px;
+  background:rgba(2,5,10,.86); backdrop-filter:blur(6px);
 }
-.memory-list li:hover,.doc-list li:hover{background:#101725}
-.mem-top{display:flex;justify-content:space-between;gap:8px;align-items:baseline}
-.mem-text{color:var(--text);word-break:break-word;line-height:1.5}
-.mem-kind{font-size:8.5px;font-weight:700;letter-spacing:.5px;color:var(--dim);flex:0 0 auto}
-.mem-meta{color:var(--dim);font-size:9.5px;margin-top:3px;display:flex;gap:7px;flex-wrap:wrap}
-.band{font-weight:700;letter-spacing:.4px}
-.band.CERTAIN,.band.CRITICAL{color:var(--green)}
-.band.HIGH{color:var(--accent)}
-.band.MEDIUM,.band.NORMAL{color:var(--muted)}
-.band.LOW,.band.TRIVIAL{color:var(--dim)}
-.mem-flag{color:var(--gold)}
-.st-PROPOSED{color:var(--gold)} .st-ARCHIVED{color:var(--dim)}
-.st-SUPERSEDED{color:var(--dim)} .st-ACTIVE{color:var(--green)}
-.mem-actions{display:flex;gap:5px;margin-top:5px}
-
-.doc-title{color:var(--text);font-weight:600;word-break:break-word}
-.doc-meta{color:var(--dim);font-size:9.5px;margin-top:2px}
-.doc-status{font-size:8.5px;font-weight:700;letter-spacing:.5px;flex:0 0 auto}
-.ds-INDEXED{color:var(--green)} .ds-FAILED{color:var(--red)}
-.ds-REGISTERED,.ds-EXTRACTING,.ds-CHUNKING,.ds-EMBEDDING{color:var(--gold)}
-
-.source-list li{cursor:default}
-.src-row{display:flex;justify-content:space-between;gap:8px;align-items:baseline}
-.src-name{color:var(--text)}
-.src-state{font-size:8.5px;font-weight:700;letter-spacing:.5px}
-.src-state.on{color:var(--green)} .src-state.off{color:var(--dim)}
-.src-detail{color:var(--dim);font-size:9.5px;margin-top:2px;line-height:1.5}
-
-/* ── memory modal ────────────────────────────────────────────────────── */
-.memory-card{border-color:var(--border);max-width:560px}
-.mem-edit{
-  width:100%;background:var(--sunk);color:var(--text);border:1px solid var(--border);
-  border-radius:8px;padding:9px 11px;font-family:inherit;font-size:12px;
-  line-height:1.6;resize:vertical;
+.auth-card,.modal-card{
+  width:min(560px,100%); padding:22px; display:flex; flex-direction:column; gap:13px;
+  box-shadow:0 0 60px rgba(79,216,255,.10);
 }
-.mem-edit:focus{outline:none;border-color:#2c4a6e}
-.mem-facts{display:flex;flex-wrap:wrap;gap:10px;margin:10px 0;font-size:10.5px;color:var(--dim)}
-.mem-facts b{color:var(--muted);font-weight:600}
-.mem-history{margin-top:8px;font-size:10.5px;color:var(--dim)}
-.mem-history summary{cursor:pointer;color:var(--muted)}
-.mem-history-list{list-style:none;margin-top:6px;max-height:150px;overflow-y:auto}
-.mem-history-list li{padding:3px 0;border-bottom:1px solid #161d29;line-height:1.5}
-.modal-actions .spacer{flex:1}
+.auth-card h2,.modal-head h3{color:var(--accent); text-shadow:0 0 12px var(--accent-glow)}
+.auth-error{color:var(--red)}
+.modal-body{max-height:52vh; overflow-y:auto; display:flex;
+            flex-direction:column; gap:11px}
+.modal-args{
+  background:var(--sunk); border:var(--hair); border-radius:var(--radius);
+  padding:11px; white-space:pre-wrap; word-break:break-word;
+  color:var(--muted); font-size:11px; max-height:220px; overflow:auto;
+}
+/* A confirmation is the one place in this interface where the styling has a
+   job beyond looking right: it must not be possible to click through it on
+   reflex. Gold, because gold means "a human is required" everywhere else here
+   too, and the actions sit apart from the body so the pointer has to travel. */
+.modal-card{border-color:transparent;
+  background:
+    linear-gradient(var(--card),var(--card)) padding-box,
+    linear-gradient(160deg, var(--gold), rgba(255,181,69,.15)) border-box;
+}
+.modal-card::before,.modal-card::after{border-color:var(--gold)}
+.modal-actions{margin-top:6px; padding-top:13px; border-top:1px solid var(--border)}
 
-/* ── computer panel ──────────────────────────────────────────────────── */
-.stop-bar{padding:10px 12px;border-bottom:1px solid var(--border);background:#170d0c}
+/* ── emergency stop ───────────────────────────────────────────────────── */
+
+.stop-bar{
+  display:flex; align-items:center; gap:11px; padding:9px 13px;
+  border:1px solid rgba(255,93,93,.4); background:rgba(255,93,93,.06);
+  border-radius:var(--radius); margin-bottom:11px;
+}
 .stop-button{
-  width:100%;font-size:13px;font-weight:800;letter-spacing:1.4px;padding:11px;
-  background:#3d1512;border-color:#8c2f28;color:#ffd9d6;
+  background:rgba(255,93,93,.12); border:1px solid var(--red); color:var(--red);
+  font-weight:700; letter-spacing:.16em;
 }
-.stop-button:hover{border-color:var(--red);background:#4d1a16}
-.stop-button.engaged{background:var(--red);color:#1a0806;border-color:var(--red)}
-.stop-state{font-size:10.5px;color:var(--red);margin-top:7px;line-height:1.6}
+.stop-button:hover{box-shadow:0 0 22px var(--red-glow)}
+.stop-state{color:var(--red); font-size:11px; letter-spacing:.1em}
 
-.comp-block{padding:10px 12px;border-bottom:1px solid #161d29}
-.comp-block h4{
-  font-size:9.5px;letter-spacing:1px;color:var(--bright);font-weight:700;
-  margin-bottom:7px;text-transform:uppercase;
-}
-.comp-hint{font-size:10px;color:var(--dim);line-height:1.6;margin:5px 0}
-.comp-block select{
-  width:100%;background:var(--sunk);color:var(--text);border:1px solid var(--border);
-  border-radius:7px;padding:6px 8px;font-family:inherit;font-size:11px;
-}
-.comp-block select:focus{outline:none;border-color:#2c4a6e}
+/* ── misc blocks ──────────────────────────────────────────────────────── */
 
-.scope-list{list-style:none;margin-top:4px}
-.scope-list li{
-  display:flex;align-items:center;gap:8px;padding:4px 0;font-size:10.5px;
-}
-.scope-name{flex:1;color:var(--text)}
-.scope-list label{display:flex;align-items:center;gap:4px;color:var(--dim);cursor:pointer}
-.scope-list input[type=checkbox]{accent-color:var(--accent);cursor:pointer}
-.scope-list li.forbidden{opacity:.4}
-.scope-list li.forbidden .scope-name::after{
-  content:" — not in this phase";color:var(--dim);font-size:9.5px;
-}
-
+.obsidian-block,.comp-block,.system-info{padding:11px; margin-bottom:11px;
+                                          display:flex; flex-direction:column; gap:9px}
+.obs-form{display:flex; flex-direction:column; gap:7px}
+.obs-label{font-size:10px; letter-spacing:.13em; text-transform:uppercase; color:var(--muted)}
+.obs-input{width:100%}
+.obs-caps{display:flex; gap:6px; flex-wrap:wrap}
+.obs-cap{font-size:9px; letter-spacing:.1em; text-transform:uppercase;
+         padding:2px 7px; border:1px solid var(--border); color:var(--muted)}
+.obs-check{display:flex; align-items:center; gap:7px; color:var(--muted); font-size:11px}
+.obs-conflicts{border-top:1px solid var(--border); padding-top:9px}
+.obs-conflict-list{list-style:none; display:flex; flex-direction:column; gap:4px}
+.obs-conflict-path{color:var(--gold); font-size:11px; word-break:break-all}
+.comp-hint{color:var(--dim); font-size:11px}
 .screen-preview{
-  width:100%;margin-top:8px;border:1px solid var(--border);border-radius:7px;
-  display:block;
+  width:100%; border:1px solid var(--border); border-radius:var(--radius);
+  display:block; background:var(--sunk);
+}
+.src-name,.scope-name{color:var(--text)}
+.src-detail{color:var(--dim); font-size:11px; word-break:break-all}
+.audit-outcome{font-size:9px; letter-spacing:.13em; text-transform:uppercase}
+.mem-history{border-top:1px solid var(--border); margin-top:6px; padding-top:6px}
+
+/* ── scrollbars ───────────────────────────────────────────────────────── */
+
+::-webkit-scrollbar{width:9px; height:9px}
+::-webkit-scrollbar-track{background:var(--sunk)}
+::-webkit-scrollbar-thumb{background:#123146; border:2px solid var(--sunk)}
+::-webkit-scrollbar-thumb:hover{background:var(--accent-soft)}
+
+/* ── narrow ───────────────────────────────────────────────────────────── */
+
+@media (max-width:900px){
+  .layout{grid-template-columns:1fr; grid-template-rows:minmax(0,1fr) minmax(0,46vh)}
+  .brand{font-size:13px; letter-spacing:.24em}
 }
 
-.audit-list{list-style:none;max-height:260px;overflow-y:auto}
-.audit-list li{padding:6px 0;border-bottom:1px solid #161d29;font-size:10.5px}
-.audit-top{display:flex;justify-content:space-between;gap:8px;align-items:baseline}
-.audit-kind{color:var(--text);font-weight:600}
-.audit-outcome{font-size:8.5px;font-weight:700;letter-spacing:.5px;flex:0 0 auto}
-.ao-SUCCEEDED{color:var(--green)} .ao-DENIED{color:var(--red)}
-.ao-FAILED{color:var(--red)} .ao-ABORTED{color:var(--gold)}
-.ao-AWAITING_CONFIRMATION{color:var(--gold)} .ao-UNAVAILABLE{color:var(--dim)}
-.ao-TIMED_OUT{color:var(--gold)}
-.audit-meta{color:var(--dim);font-size:9.5px;margin-top:2px;line-height:1.5}
-.risk-HIGH,.risk-PROHIBITED{color:var(--red);font-weight:700}
-.risk-MEDIUM{color:var(--gold)} .risk-LOW{color:var(--dim)}
-
-/* ── Obsidian ──────────────────────────────────────────────────────────────
-   Reuses the computer panel's block/hint/audit language rather than
-   introducing a second visual vocabulary — this is one system, and a
-   knowledge source should not look like a different application. */
-.obsidian-block{border-top:1px solid #161d29}
-.obsidian-block .rail-head{padding:0 0 6px 0;border:0}
-
-.obs-caps{display:flex;flex-wrap:wrap;gap:4px;margin:7px 0}
-.obs-cap{
-  font-size:8.5px;font-weight:700;letter-spacing:.5px;color:var(--muted);
-  border:1px solid var(--border);border-radius:5px;padding:2px 5px;
+/* ── reduced motion ───────────────────────────────────────────────────── */
+/* Everything that moves here is decorative, so all of it can go. A full-page
+   scanning band is precisely what this media query exists for. */
+@media (prefers-reduced-motion: reduce){
+  body::after{animation:none; opacity:.2}
+  .thinking .band::after{animation:none; width:100%;
+    background:linear-gradient(90deg,var(--accent-soft),var(--accent))}
+  *{transition:none !important}
 }
-
-.obs-form{margin-top:6px}
-.obs-label{
-  display:block;font-size:9.5px;letter-spacing:.5px;color:var(--dim);
-  margin-bottom:4px;text-transform:uppercase;
-}
-.obs-input{
-  width:100%;background:var(--sunk);color:var(--text);
-  border:1px solid var(--border);border-radius:7px;padding:6px 8px;
-  font-family:inherit;font-size:11px;
-}
-.obs-input:focus{outline:none;border-color:#2c4a6e}
-.obs-check{
-  display:flex;align-items:center;gap:6px;font-size:10.5px;color:var(--dim);
-  cursor:pointer;padding:3px 0;
-}
-.obs-check input[type=checkbox]{accent-color:var(--accent);cursor:pointer}
-
-.obs-actions{display:flex;flex-wrap:wrap;gap:6px;margin-top:8px}
-
-.obs-conflicts{margin-top:10px;border-top:1px solid #161d29;padding-top:8px}
-.obs-conflict-list{list-style:none;margin-top:4px}
-.obs-conflict-list li{padding:6px 0;border-bottom:1px solid #161d29}
-.obs-conflict-path{font-size:10.5px;color:var(--gold);font-weight:600}
-
-/* The audit statuses this panel emits, in the same colour language the
-   computer audit uses. */
-.ao-OK{color:var(--green)} .ao-CONNECTED{color:var(--green)}
-.ao-RESOLVED{color:var(--green)} .ao-DISCONNECTED{color:var(--dim)}
-.ao-ERROR{color:var(--red)} .ao-CONFLICT{color:var(--gold)}

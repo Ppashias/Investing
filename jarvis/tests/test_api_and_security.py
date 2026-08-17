@@ -372,3 +372,75 @@ def test_settings_load_from_a_bom_encoded_env_file(tmp_path, monkeypatch) -> Non
     settings = Settings(_env_file=str(env_file))
     assert settings.port == 9911
     assert settings.require_auth is False
+
+
+# ── the command centre's appearance (Phase D) ────────────────────────────────
+#
+# The Phase 1 stylesheet carried over the old portfolio dashboard's palette.
+# That was right when the two were siblings and wrong now: this is the
+# interface to something that can drive a browser, read a vault and operate a
+# machine, and it should read as an instrument.
+#
+# Look is not usually worth testing. These four are, because each one is a
+# property that a future restyle could quietly break and nobody would notice
+# until it mattered.
+
+
+def test_the_reactor_is_served_and_optional(client: TestClient) -> None:
+    """The mark must survive its script failing.
+
+    A canvas plus a CSS-drawn ring means a blocked or broken hud.js leaves the
+    brand present rather than blank. A brand that disappears with a script
+    looks like an outage.
+    """
+    page = client.get("/").text
+    assert 'id="reactor"' in page
+    assert "hud.js" in page
+    assert client.get("/assets/hud.js").status_code == 200
+    # aria-hidden, because it is decoration and a screen reader announcing
+    # "canvas" before the product name is worse than silence.
+    assert 'aria-hidden="true"' in page
+
+
+def test_the_decoration_cannot_reach_the_network_or_the_token(client: TestClient) -> None:
+    """hud.js is separate from app.js on purpose.
+
+    app.js holds an access token and hand-parses SSE frames. A decoration
+    should not share a file with that, and must not be able to read or send
+    anything.
+    """
+    import re
+
+    source = client.get("/assets/hud.js").text
+    # Code only. The header *explains* why these are absent, so a plain scan
+    # would match its own explanation — the same trap the goal-service test
+    # hit.
+    code = re.sub(r"/\*.*?\*/", "", source, flags=re.S)
+    code = re.sub(r"^\s*//.*$", "", code, flags=re.M)
+
+    for forbidden in ("fetch(", "XMLHttpRequest", "localStorage", "token",
+                      "EventSource", "WebSocket", "innerHTML"):
+        assert forbidden not in code, f"{forbidden} appears in the HUD script"
+
+
+def test_motion_can_be_turned_off_entirely(client: TestClient) -> None:
+    """Everything that moves here is decorative, so all of it must be able to
+    stop. A full-page scanning band is precisely what this media query exists
+    for, and it is the sort of effect that makes some people ill."""
+    css = client.get("/assets/app.css").text
+    assert "prefers-reduced-motion" in css
+    hud = client.get("/assets/hud.js").text
+    assert "prefers-reduced-motion" in hud
+
+
+def test_the_stylesheet_still_beats_the_hidden_attribute(client: TestClient) -> None:
+    """The Phase 1 lesson, re-pinned after a full restyle.
+
+    Every overlay on this page is display:flex, and the UA rule
+    [hidden]{display:none} loses to any author rule setting display. Without
+    the override the confirmation dialog and the auth gate are permanently
+    visible — which is a security-relevant bug wearing a cosmetic disguise,
+    because a dialog nobody can dismiss is a dialog people click through.
+    """
+    css = client.get("/assets/app.css").text
+    assert "[hidden]{display:none !important}" in css
