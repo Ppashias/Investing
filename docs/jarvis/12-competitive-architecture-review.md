@@ -413,7 +413,7 @@ Everything below is **NOT STARTED**. Nothing in this document has been built.
 | 4 | Audit channel + impact classification | NOT STARTED |
 | 5 | Context rules | NOT STARTED |
 | 6 | AgentSupervisor | **IMPLEMENTED** — 21 tests. Authority model verified; not yet wired to a live model loop or exposed as a tool |
-| 7 | Background execution | NOT STARTED |
+| 7 | Background execution | **IMPLEMENTED** — 18 tests. Runner verified; not yet wired to the orchestrator or exposed as a tool |
 | 8 | OS sandbox | NOT STARTED |
 | 9 | Windows UIA backend | **IMPLEMENTED — WINDOWS UNVERIFIED.** 14 tests off-Windows; no input call has ever executed |
 | 10 | Skill system | NOT STARTED |
@@ -422,7 +422,7 @@ Everything below is **NOT STARTED**. Nothing in this document has been built.
 | 13 | Telemetry | NOT STARTED |
 | 14 | Voice | NOT STARTED |
 
-Four of fourteen. Nothing above is called VERIFIED unless a test exercises the
+Five of fourteen. Nothing above is called VERIFIED unless a test exercises the
 behaviour it claims — item 6 is IMPLEMENTED rather than VERIFIED because its
 authority model is tested and its integration with a real agent loop is not,
 and item 9 cannot be VERIFIED anywhere but Windows.
