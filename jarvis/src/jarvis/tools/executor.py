@@ -251,6 +251,7 @@ class ToolExecutor:
                 reversible=tool.reversible,
                 tool_name=tool.name,
                 tainted=ctx.tainted,
+                agent=ctx.agent,
             )
         )
         record.permission_decision = decision.mode

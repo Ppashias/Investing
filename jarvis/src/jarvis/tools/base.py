@@ -57,6 +57,16 @@ class ToolContext:
     #: or when a :class:`ConfirmationNeeded` signal was answered mid-flight.
     #: Nothing else writes it, and a handler that sets it is lying to itself.
     confirmed: bool = False
+    #: Who is asking, when it is not the user's own loop.
+    #:
+    #: ``None`` is the root agent: the grants are the whole story. A sub-agent
+    #: carries an :class:`~jarvis.agents.identity.AgentIdentity` whose
+    #: capability and tool sets bound what it may attempt, checked by the
+    #: permission engine before grants and never liftable by one. Handlers do
+    #: not read this — the engine does — but it travels here because
+    #: :class:`ToolContext` is what a handler is allowed to reach, and a
+    #: delegated call is still a call.
+    agent: Any = None
     extras: dict[str, Any] = field(default_factory=dict)
 
 

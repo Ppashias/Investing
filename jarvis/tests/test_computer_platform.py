@@ -494,3 +494,154 @@ def test_no_action_kind_maps_to_a_forbidden_scope() -> None:
     from jarvis.computer.types import ACTION_SCOPE
 
     assert not {ACTION_SCOPE[kind] for kind in ActionKind} & PHASE3_FORBIDDEN_SCOPES
+
+
+# ── the Windows backend (Phase D, item 9) ────────────────────────────────────
+#
+# UNVERIFIED — WINDOWS RUNTIME. None of this executes an input call; those need
+# a Windows session and there isn't one. What is tested here is everything that
+# does not: the platform guard, the key vocabulary, the escaping, the element
+# registry's staleness rule, and the refusal messages. Those are the parts
+# where a mistake is silent — a key name that becomes a key *sequence* types
+# something nobody asked for and reports success.
+
+
+def test_the_windows_backend_refuses_to_run_anywhere_else() -> None:
+    """Constructing it off-Windows must fail loudly rather than half-work."""
+    from jarvis.computer.backends.base import BackendUnavailable
+    from jarvis.computer.backends.windows import WindowsBackend
+
+    if platform.system() == "Windows":  # pragma: no cover - not this machine
+        pytest.skip("this assertion is about the non-Windows case")
+    with pytest.raises(BackendUnavailable) as caught:
+        WindowsBackend()
+    assert "only runs on Windows" in str(caught.value)
+
+
+def test_a_missing_dependency_names_the_install_command() -> None:
+    """"Unavailable" without a remedy is a dead end."""
+    from jarvis.computer.backends.base import BackendUnavailable
+    from jarvis.computer.backends.windows import _require
+
+    with pytest.raises(BackendUnavailable) as caught:
+        _require("a_module_that_does_not_exist")
+    assert "pip install pywinauto" in str(caught.value)
+
+
+@pytest.mark.parametrize(
+    "text,expected",
+    [
+        ("hello", "hello"),
+        ("a+b", "a{+}b"),
+        ("100%", "100{%}"),
+        ("^caret", "{^}caret"),
+        ("{DEL}", "{{}DEL{}}"),
+        ("(paren)", "{(}paren{)}"),
+    ],
+)
+def test_typed_text_is_escaped_not_interpreted(text: str, expected: str) -> None:
+    """``send_keys`` reads ``^%+{}()~`` as syntax.
+
+    Without escaping, a password containing ``+`` presses Shift and a document
+    containing ``{DEL}`` deletes something. Both would be reported as a
+    successful "type".
+    """
+    from jarvis.computer.backends.windows import WindowsBackend
+
+    assert WindowsBackend._escape(text) == expected
+
+
+def test_an_unknown_key_is_refused_rather_than_forwarded() -> None:
+    """A key name must not be able to become a key sequence.
+
+    The vocabulary is explicit for this reason: forwarding an arbitrary string
+    to ``send_keys`` would let ``press_key("^{ESC}")`` open the Start menu, and
+    a model that can name a key could name a macro.
+    """
+    from jarvis.computer.backends.base import BackendError
+    from jarvis.computer.backends.windows import _KEYS
+
+    assert "enter" in _KEYS and _KEYS["enter"] == "{ENTER}"
+    # Nothing in the table maps to a bare modifier or a multi-key sequence.
+    for token in _KEYS.values():
+        assert token.startswith("{") and token.endswith("}")
+        assert token.count("{") == 1
+    assert BackendError is not None
+
+
+def test_only_known_modifiers_compose_a_hotkey() -> None:
+    from jarvis.computer.backends.windows import _MODIFIERS
+
+    assert set(_MODIFIERS) >= {"ctrl", "alt", "shift"}
+    for name, token in _MODIFIERS.items():
+        assert token, name
+
+
+def test_element_ids_are_issued_not_guessed() -> None:
+    """The browser's argument, applied to the desktop.
+
+    A coordinate the model computed from a screenshot clicks whatever happens
+    to be underneath and reports success. An id JARVIS issued resolves to a
+    named control or to nothing.
+    """
+    from jarvis.computer.backends.base import BackendError
+    from jarvis.computer.backends.windows import UiElement, WindowsBackend
+
+    backend = WindowsBackend.__new__(WindowsBackend)
+    backend._elements = {}
+    backend._generation = 0
+    backend._elements_window = None
+
+    with pytest.raises(BackendError) as caught:
+        backend.resolve("ui_invented")
+    assert "never issued" in str(caught.value)
+
+    element = UiElement(element_id="ui_1", name="Transfer funds",
+                        control_type="Button", rect=(0, 0, 100, 40))
+    backend._elements["ui_1"] = element
+    assert backend.resolve("ui_1") is element
+    assert element.centre == (50, 20)
+
+
+def test_a_disabled_control_is_refused_rather_than_clicked() -> None:
+    """Clicking a greyed-out button succeeds and does nothing, which is worse
+    than failing: the model believes the action happened."""
+    from jarvis.computer.backends.base import BackendError
+    from jarvis.computer.backends.windows import UiElement, WindowsBackend
+
+    backend = WindowsBackend.__new__(WindowsBackend)
+    backend._elements = {
+        "ui_1": UiElement(element_id="ui_1", name="Send", control_type="Button",
+                          rect=(0, 0, 10, 10), enabled=False)
+    }
+    with pytest.raises(BackendError) as caught:
+        backend.click_element("ui_1")
+    assert "greyed out" in caught.value.user_message
+
+
+def test_only_operable_controls_are_offered() -> None:
+    """Static text is content, not something to press."""
+    from jarvis.computer.backends.windows import INTERACTIVE_TYPES
+
+    assert "Button" in INTERACTIVE_TYPES
+    assert "Edit" in INTERACTIVE_TYPES
+    assert "Text" not in INTERACTIVE_TYPES
+    assert "Image" not in INTERACTIVE_TYPES
+
+
+def test_the_service_picks_the_windows_backend_on_windows(monkeypatch) -> None:
+    """Pinned by source, because the branch cannot run here.
+
+    The display probe reports "no desktop" on Windows — there is no X server
+    and never will be — so without this branch a Windows machine with a real
+    desktop gets UnavailableBackend.
+    """
+    import inspect
+
+    from jarvis.computer.service import ComputerService
+
+    source = inspect.getsource(ComputerService.start)
+    assert 'platform.system() == "Windows"' in source
+    assert "WindowsBackend" in source
+    # …and the X11 branch is now the *else*, so neither shadows the other.
+    assert "elif self.capabilities.display:" in source

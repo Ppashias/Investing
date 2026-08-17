@@ -20,6 +20,7 @@ question "why can't JARVIS see my screen?" instead of returning 404.
 
 from __future__ import annotations
 
+import platform
 import subprocess
 from dataclasses import dataclass
 from pathlib import Path
@@ -125,7 +126,20 @@ class ComputerService:
                 self._display, self._virtual_display = started
                 self.capabilities = detect(probe_display=self._display)
 
-        if self.capabilities.display:
+        if platform.system() == "Windows":
+            # Windows has no X display and never will, so the display probe
+            # above says "no desktop" on a machine that plainly has one. The
+            # platform answers this question, not the display server.
+            #
+            # UNVERIFIED — WINDOWS RUNTIME: this branch has never executed.
+            from jarvis.computer.backends.windows import WindowsBackend
+
+            try:
+                self.backend = WindowsBackend()
+            except Exception as exc:
+                log.warning("windows_backend_failed", error=str(exc))
+                self.backend = UnavailableBackend(str(exc))
+        elif self.capabilities.display:
             from jarvis.computer.backends.x11 import X11Backend
 
             try:

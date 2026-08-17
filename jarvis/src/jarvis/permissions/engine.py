@@ -77,6 +77,14 @@ class PermissionRequest:
     #: source (a fetched page, an email body). Reserved for Phase 5's taint
     #: tracking; the engine already honours it so the plumbing is not retrofit.
     tainted: bool = False
+    #: The asking agent's ceiling, when a sub-agent is asking.
+    #:
+    #: ``None`` for the user's own loop, which acts on the grants alone. A
+    #: sub-agent carries an :class:`~jarvis.agents.identity.AgentIdentity`
+    #: whose capability and tool sets bound what it may attempt — checked
+    #: *before* grants and never liftable by one, so delegation can only ever
+    #: subtract authority.
+    agent: Any = None
 
 
 @dataclass(slots=True)
@@ -128,6 +136,18 @@ class PermissionEngine:
 
     async def evaluate(self, request: PermissionRequest) -> PermissionDecision:
         rules: list[str] = []
+
+        # The agent ceiling comes first, and returns rather than downgrading.
+        #
+        # Order is the point. A ceiling checked after grants would be one more
+        # thing that could be argued with by adding a grant, and the whole
+        # value of delegation being safe is that a child's bound does not move
+        # when the user's permissions do. A ceiling only ever subtracts, so
+        # there is nothing to combine — outside it is simply not this agent's
+        # to attempt.
+        ceiling = self._ceiling_verdict(request)
+        if ceiling is not None:
+            return ceiling
 
         grant = await self._best_grant(request)
         if grant is not None:
@@ -213,6 +233,47 @@ class PermissionEngine:
             reason=reason,
         )
         return decision
+
+    @staticmethod
+    def _ceiling_verdict(request: PermissionRequest) -> PermissionDecision | None:
+        """DENY when a sub-agent asks for something outside its ceiling.
+
+        Returns ``None`` when there is nothing to say — no agent, root agent,
+        or a request the ceiling permits — so the ordinary path is unchanged
+        and costs one attribute read.
+        """
+        agent = request.agent
+        if agent is None:
+            return None
+
+        def refuse(rule: str, why: str) -> PermissionDecision:
+            log.warning(
+                "agent_ceiling_denied",
+                agent_id=getattr(agent, "agent_id", "?"),
+                role=getattr(agent, "role", "?"),
+                capability=request.capability.value,
+                tool=request.tool_name,
+            )
+            return PermissionDecision(
+                mode=PermissionMode.DENY,
+                reason=why,
+                capability=request.capability,
+                resource=request.resource,
+                applied_rules=[rule],
+            )
+
+        if not agent.permits_capability(request.capability):
+            return refuse(
+                f"agent_ceiling(capability={request.capability.value})",
+                f"The {agent.role} agent was not delegated "
+                f"{request.capability.value}.",
+            )
+        if request.tool_name and not agent.permits_tool(request.tool_name):
+            return refuse(
+                f"agent_ceiling(tool={request.tool_name})",
+                f"The {agent.role} agent was not delegated {request.tool_name}.",
+            )
+        return None
 
     async def _best_grant(self, request: PermissionRequest) -> PermissionGrant | None:
         now = datetime.now(timezone.utc)
