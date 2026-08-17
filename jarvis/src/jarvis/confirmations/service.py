@@ -76,6 +76,9 @@ class ConfirmationRequest:
     stored_arguments: dict[str, Any] | None = None
     risk_level: RiskLevel = RiskLevel.MEDIUM
     reversible: bool = True
+    #: How far the action reaches. Derived by the executor from the tool rather
+    #: than declared here, so nothing has to remember to set it.
+    impact: str = "write"
     request_id: str | None = None
     conversation_id: str | None = None
     reason: str | None = None
@@ -128,6 +131,7 @@ class ConfirmationService:
                 "reason": req.reason,
             },
             risk_level=req.risk_level,
+            impact=req.impact,
             reversible=req.reversible,
             status=ConfirmationStatus.PENDING,
             expires_at=utcnow() + timedelta(seconds=self.ttl_seconds),
@@ -222,6 +226,18 @@ class ConfirmationService:
 
     # ── decision ─────────────────────────────────────────────────────────────
 
+    #: Channels a destructive action may never be approved through.
+    #:
+    #: Straight from `vierisid/jarvis`, and its reasoning is the right one: a
+    #: single misheard syllable could trigger a payment. Speech recognition
+    #: mishears, a podcast in the background says "yes", somebody else in the
+    #: room answers. For a destructive action the deliberate act — a click, an
+    #: explicit API call — is the only authoritative path.
+    #:
+    #: Denials are exempt. Refusing to act on a mishearing would mean the
+    #: cautious answer is the one the system ignores.
+    UNSAFE_FOR_DESTRUCTIVE = frozenset({"voice"})
+
     async def decide(
         self,
         confirmation_id: str,
@@ -229,8 +245,23 @@ class ConfirmationService:
         approved: bool,
         decided_by: str = "user",
         note: str | None = None,
+        channel: str = "ui",
     ) -> Confirmation:
         confirmation = await self.get(confirmation_id)
+
+        if (
+            approved
+            and channel in self.UNSAFE_FOR_DESTRUCTIVE
+            and (confirmation.impact or "") == "destructive"
+        ):
+            raise ValidationError(
+                f"Confirmation {confirmation_id} is destructive and cannot be "
+                f"approved by {channel}",
+                user_message=(
+                    "That one cannot be approved by voice — it cannot be "
+                    "undone. Approve it in the Command Center instead."
+                ),
+            )
 
         if confirmation.status is ConfirmationStatus.EXPIRED:
             raise ValidationError(
@@ -248,6 +279,7 @@ class ConfirmationService:
         )
         confirmation.decided_by = decided_by
         confirmation.decision_note = note
+        confirmation.resolution_channel = channel
         confirmation.decided_at = utcnow()
         await self.session.flush()
 
@@ -285,6 +317,11 @@ class ConfirmationService:
             "reason": confirmation.action.get("reason"),
             "risk_level": confirmation.risk_level.value,
             "reversible": confirmation.reversible,
+            # The axis a person actually reasons about: can I take this back?
+            # Surfaced so the UI can render destructive differently rather than
+            # leaving the user to infer it from risk_level plus reversible.
+            "impact": confirmation.impact,
+            "resolution_channel": confirmation.resolution_channel,
             "status": confirmation.status.value,
             "created_at": confirmation.created_at.isoformat()
             if confirmation.created_at

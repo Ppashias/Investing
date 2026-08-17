@@ -9,7 +9,7 @@ from __future__ import annotations
 import asyncio
 import json
 from datetime import datetime, timezone
-from typing import Annotated, Any
+from typing import Annotated, Any, Literal
 
 from fastapi import APIRouter, Body, Depends, HTTPException, Query, status
 from fastapi.responses import StreamingResponse
@@ -68,6 +68,11 @@ class UpdateTaskRequest(BaseModel):
 class DecisionRequest(BaseModel):
     approved: bool
     note: str | None = None
+    #: How the decision arrived. Defaults to the deliberate path; a voice
+    #: front-end says so, and the service refuses a voice approval of anything
+    #: destructive. Recorded either way, because "through what?" is a forensic
+    #: question whose answer must not depend on correlating timestamps.
+    channel: Literal["ui", "api", "voice"] = "ui"
 
 
 class ToolPolicyRequest(BaseModel):
@@ -375,14 +380,16 @@ async def decide_confirmation(
         raise HTTPException(status.HTTP_404_NOT_FOUND, "Confirmation not found")
 
     decided = await service.decide(
-        confirmation_id, approved=body.approved, decided_by="user", note=body.note
+        confirmation_id, approved=body.approved, decided_by="user",
+        note=body.note, channel=body.channel,
     )
     await ActivityService(session, core.activity_bus).record(
         ActivityKind.CONFIRMATION_RESOLVED,
         summary=f"{'Approved' if body.approved else 'Denied'}: "
                 f"{decided.action.get('tool')}",
         actor="user",
-        detail={"confirmation_id": confirmation_id, "approved": body.approved},
+        detail={"confirmation_id": confirmation_id, "approved": body.approved,
+                "channel": body.channel, "impact": decided.impact},
         conversation_id=decided.conversation_id,
         status=decided.status.value,
     )

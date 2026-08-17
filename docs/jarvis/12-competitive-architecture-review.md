@@ -410,7 +410,7 @@ Everything below is **NOT STARTED**. Nothing in this document has been built.
 | 1 | C2 taint-laundering fix | **VERIFIED** — 6 tests, mutation-checked |
 | 2 | Memory provenance + taint gate | **IMPLEMENTED** — provenance on the row; a broader audit of every write path is not done |
 | 3 | Emergency stop at the executor | **VERIFIED** — 7 tests |
-| 4 | Audit channel + impact classification | NOT STARTED |
+| 4 | Audit channel + impact classification | **VERIFIED** — 8 tests, migration `a3f1d90e77b2`, destructive-never-by-voice enforced |
 | 5 | Context rules | NOT STARTED |
 | 6 | AgentSupervisor | **VERIFIED** — 29 tests. Wired to the orchestrator and exposed as `spawn_agent`; the delegated *model loop* is not built |
 | 7 | Background execution | **IMPLEMENTED** — 18 tests + 3 tools. Lifecycle verified; a job currently *records* its request rather than carrying it out |
@@ -422,7 +422,7 @@ Everything below is **NOT STARTED**. Nothing in this document has been built.
 | 13 | Telemetry | NOT STARTED |
 | 14 | Voice | NOT STARTED |
 
-Five of fourteen. Nothing above is called VERIFIED unless a test exercises the
+Six of fourteen. Nothing above is called VERIFIED unless a test exercises the
 behaviour it claims — item 6 is IMPLEMENTED rather than VERIFIED because its
 authority model is tested and its integration with a real agent loop is not,
 and item 9 cannot be VERIFIED anywhere but Windows.

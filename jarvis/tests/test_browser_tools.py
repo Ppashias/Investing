@@ -2078,11 +2078,17 @@ async def test_a_page_cannot_format_the_confirmation_it_is_asked_about(
                        {"page_id": page_id, "element_id": element_id})
 
     body = await pending_body(browsing)
-    # One blank line: the one this code writes. Everything the page supplied
-    # stays inside the line it was put on.
-    assert body.count("\n\n") == 1
-    assert "\n" not in body.split("\n\n")[1]
-    assert body.splitlines()[0].startswith("Click the link “Continue” on ")
+    # Two blank lines, both written by JARVIS: one before the destination, one
+    # before the impact sentence the executor appends. Everything the page
+    # supplied stays inside the single line it was put on.
+    parts = body.split("\n\n")
+    assert len(parts) == 3, parts
+    assert "\n" not in parts[1], "page-authored text spanned a line of its own"
+    assert parts[0].startswith("Click the link “Continue” on ")
+    # browser_click declares reversible=False, so it classifies destructive —
+    # which is the right thing to tell someone approving a click on a real
+    # website, and stronger than the "external" its capability alone implies.
+    assert parts[2] == "This cannot be undone."
 
 
 async def test_an_unresolvable_reference_still_produces_a_confirmation(

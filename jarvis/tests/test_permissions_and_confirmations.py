@@ -369,3 +369,159 @@ def test_fingerprint_is_key_order_independent() -> None:
 
 def test_fingerprint_differs_on_value_change() -> None:
     assert action_fingerprint("t", {"a": 1}) != action_fingerprint("t", {"a": 2})
+
+
+# ── impact, and the channel a decision arrived through (Phase D, item 4) ─────
+#
+# Capability answers "which domain". Risk answers "how bad if it goes wrong".
+# Neither answers the question a person actually asks when a dialog appears,
+# which is "can I take this back?" — and that question is the one the voice
+# rule depends on.
+
+
+@pytest.mark.parametrize(
+    "capability,reversible,risk,expected",
+    [
+        (Capability.READ, True, RiskLevel.NONE, "read"),
+        (Capability.READ, True, RiskLevel.LOW, "read"),
+        (Capability.WRITE, True, RiskLevel.LOW, "write"),
+        (Capability.EXTERNAL_ACTION, True, RiskLevel.MEDIUM, "external"),
+        (Capability.EXECUTE, True, RiskLevel.LOW, "external"),
+        # Running a shell command is not reversible in any sense we can verify.
+        (Capability.EXECUTE, True, RiskLevel.HIGH, "destructive"),
+        (Capability.SENSITIVE_ACTION, True, RiskLevel.NONE, "destructive"),
+        # Irreversible beats everything, including a read.
+        (Capability.READ, False, RiskLevel.NONE, "destructive"),
+        # So does CRITICAL: a tool rated critical rendered as "changes
+        # something" is a dialog that misinforms.
+        (Capability.WRITE, True, RiskLevel.CRITICAL, "destructive"),
+    ],
+)
+def test_impact_is_derived_pessimistically(capability, reversible, risk, expected):
+    from jarvis.permissions.impact import impact_of
+
+    assert impact_of(capability, reversible=reversible,
+                     risk_level=risk).value == expected
+
+
+def test_impact_is_derived_rather_than_declared() -> None:
+    """A fourth declared field is a field somebody forgets to set, and the
+    failure mode of forgetting is a destructive action rendered as routine."""
+    from jarvis.tools.base import Tool
+
+    assert "impact" not in {f for f in Tool.__slots__}
+
+
+async def test_a_confirmation_records_how_far_the_action_reaches(
+    session, user
+) -> None:
+    from jarvis.confirmations.service import ConfirmationRequest, ConfirmationService
+
+    service = ConfirmationService(session)
+    confirmation = await service.request(
+        ConfirmationRequest(
+            user_id=user.id, title="Allow browser_click?", body="Click something.",
+            tool_name="browser_click", arguments={"page_id": "pg_1"},
+            risk_level=RiskLevel.MEDIUM, reversible=False, impact="destructive",
+        )
+    )
+    await session.flush()
+    assert confirmation.impact == "destructive"
+    assert ConfirmationService.to_dict(confirmation)["impact"] == "destructive"
+
+
+async def test_a_destructive_action_cannot_be_approved_by_voice(
+    session, user
+) -> None:
+    """`vierisid/jarvis`'s rule, and its reasoning: a single misheard syllable
+    could trigger a payment.
+
+    Speech recognition mishears, a podcast says "yes", somebody else in the
+    room answers. For something that cannot be undone, the deliberate act is
+    the only authoritative path.
+    """
+    from jarvis.confirmations.service import ConfirmationRequest, ConfirmationService
+    from jarvis.errors import ValidationError
+
+    service = ConfirmationService(session)
+    confirmation = await service.request(
+        ConfirmationRequest(
+            user_id=user.id, title="Allow run_command?", body="rm -rf",
+            tool_name="run_command", arguments={}, reversible=False,
+            impact="destructive",
+        )
+    )
+    await session.flush()
+
+    with pytest.raises(ValidationError) as caught:
+        await service.decide(confirmation.id, approved=True, channel="voice")
+    assert "cannot be approved by voice" in str(caught.value)
+
+    # …and the deliberate path still works.
+    decided = await service.decide(confirmation.id, approved=True, channel="ui")
+    assert decided.status is ConfirmationStatus.APPROVED
+    assert decided.resolution_channel == "ui"
+
+
+async def test_a_destructive_action_can_still_be_refused_by_voice(
+    session, user
+) -> None:
+    """Refusing to act on a mishearing would mean the cautious answer is the
+    one the system ignores."""
+    from jarvis.confirmations.service import ConfirmationRequest, ConfirmationService
+
+    service = ConfirmationService(session)
+    confirmation = await service.request(
+        ConfirmationRequest(
+            user_id=user.id, title="Allow run_command?", body="rm -rf",
+            tool_name="run_command", arguments={}, reversible=False,
+            impact="destructive",
+        )
+    )
+    await session.flush()
+
+    decided = await service.decide(confirmation.id, approved=False, channel="voice")
+    assert decided.status is ConfirmationStatus.DENIED
+    assert decided.resolution_channel == "voice"
+
+
+async def test_a_non_destructive_action_may_be_approved_by_voice(
+    session, user
+) -> None:
+    from jarvis.confirmations.service import ConfirmationRequest, ConfirmationService
+
+    service = ConfirmationService(session)
+    confirmation = await service.request(
+        ConfirmationRequest(
+            user_id=user.id, title="Allow create_task?", body="Make a task.",
+            tool_name="create_task", arguments={}, impact="write",
+        )
+    )
+    await session.flush()
+
+    decided = await service.decide(confirmation.id, approved=True, channel="voice")
+    assert decided.status is ConfirmationStatus.APPROVED
+    assert decided.resolution_channel == "voice"
+
+
+def test_the_executor_appends_the_impact_sentence() -> None:
+    """Appended centrally, not written into each tool's template.
+
+    A tool that forgot the sentence would render a destructive action as a
+    routine one, and the classification comes from fields the tool already
+    declares — so there is nothing for it to forget.
+    """
+    import inspect
+
+    from jarvis.tools.base import Tool, ToolResult
+    from jarvis.tools.executor import ToolExecutor
+
+    assert "_with_impact" in inspect.getsource(ToolExecutor._authorise)
+
+    async def _noop(*, ctx):  # pragma: no cover - never invoked
+        return ToolResult.ok("")
+
+    body = ToolExecutor._with_impact(
+        Tool("t", "d", {}, _noop, reversible=False), "Do the thing."
+    )
+    assert "cannot be undone" in body

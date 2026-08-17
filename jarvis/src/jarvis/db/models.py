@@ -502,6 +502,22 @@ class Confirmation(Base):
     )
     decided_by: Mapped[str | None] = mapped_column(String(64), nullable=True)
     decision_note: Mapped[str | None] = mapped_column(Text, nullable=True)
+    #: How far the action reaches, in one word — see
+    #: :mod:`jarvis.permissions.impact`. Stored rather than re-derived so the
+    #: record says what the user was actually shown, even if a tool's
+    #: classification changes later.
+    impact: Mapped[str] = mapped_column(String(16), default="write")
+    #: How the decision arrived: ``ui``, ``api``, ``voice``, ``system``.
+    #:
+    #: `vierisid/jarvis` carries this on its audit rows and it is worth
+    #: copying: "who approved this, and through what?" is a forensic question
+    #: whose answer must not depend on correlating timestamps. It also makes
+    #: the voice rule enforceable — a destructive action must never be
+    #: resolvable by a spoken yes, and that rule needs somewhere to record
+    #: which channel *did* resolve it.
+    resolution_channel: Mapped[str | None] = mapped_column(
+        String(16), nullable=True
+    )
 
     created_at: Mapped[datetime] = ts_column(default=utcnow, index=True)
     expires_at: Mapped[datetime] = ts_column(default=utcnow)

@@ -45,6 +45,7 @@ from jarvis.errors import (
 )
 from jarvis.logging import get_logger, scrub_text, timed
 from jarvis.permissions.engine import PermissionEngine, PermissionRequest
+from jarvis.permissions.impact import describe_impact, impact_of_tool
 from jarvis.tools.base import ConfirmationNeeded, Tool, ToolContext, ToolResult
 from jarvis.tools.registry import ToolRegistry
 
@@ -224,6 +225,17 @@ class ToolExecutor:
         )
 
     @staticmethod
+    def _with_impact(tool: Tool, body: str) -> str:
+        """One sentence saying how far this reaches.
+
+        Appended by the executor rather than written into each tool's template,
+        because a tool that forgot the sentence would render a destructive
+        action as a routine one — and the classification is derived from fields
+        the tool already declares, so there is nothing for it to forget.
+        """
+        return f"{body}\n\n{describe_impact(impact_of_tool(tool))}"
+
+    @staticmethod
     def _validate_arguments(tool: Tool, arguments: dict[str, Any]) -> None:
         try:
             Draft202012Validator(tool.parameters).validate(arguments)
@@ -308,12 +320,13 @@ class ToolExecutor:
             ConfirmationRequest(
                 user_id=ctx.user_id,
                 title=f"Allow {tool.name}?",
-                body=tool.confirmation_body(call.arguments, ctx),
+                body=self._with_impact(tool, tool.confirmation_body(call.arguments, ctx)),
                 tool_name=tool.name,
                 arguments=call.arguments,
                 stored_arguments=tool.for_audit(call.arguments),
                 risk_level=tool.risk_level,
                 reversible=tool.reversible,
+                impact=impact_of_tool(tool).value,
                 request_id=ctx.request_id,
                 conversation_id=ctx.conversation_id,
                 reason=decision.reason,
@@ -419,12 +432,15 @@ class ToolExecutor:
                 # The handler knows what it is asking about; the tool's generic
                 # template does not. "Let JARVIS browse example.com?" is a
                 # question someone can answer.
-                body=signal.prompt or tool.confirmation_body(call.arguments, ctx),
+                body=self._with_impact(
+                    tool, signal.prompt or tool.confirmation_body(call.arguments, ctx)
+                ),
                 tool_name=tool.name,
                 arguments=call.arguments,
                 stored_arguments=tool.for_audit(call.arguments),
                 risk_level=tool.risk_level,
                 reversible=tool.reversible,
+                impact=impact_of_tool(tool).value,
                 request_id=ctx.request_id,
                 conversation_id=ctx.conversation_id,
                 reason=signal.reason,
