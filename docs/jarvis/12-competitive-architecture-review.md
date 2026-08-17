@@ -407,20 +407,25 @@ Everything below is **NOT STARTED**. Nothing in this document has been built.
 
 | # | Item | Status |
 |---|---|---|
-| 1 | C2 taint-laundering fix | NOT STARTED (CONFIRMED DEFECT) |
-| 2 | Memory provenance + taint gate | NOT STARTED |
-| 3 | Emergency stop at the executor | NOT STARTED |
+| 1 | C2 taint-laundering fix | **VERIFIED** — 6 tests, mutation-checked |
+| 2 | Memory provenance + taint gate | **IMPLEMENTED** — provenance on the row; a broader audit of every write path is not done |
+| 3 | Emergency stop at the executor | **VERIFIED** — 7 tests |
 | 4 | Audit channel + impact classification | NOT STARTED |
 | 5 | Context rules | NOT STARTED |
-| 6 | AgentSupervisor | NOT STARTED |
+| 6 | AgentSupervisor | **IMPLEMENTED** — 21 tests. Authority model verified; not yet wired to a live model loop or exposed as a tool |
 | 7 | Background execution | NOT STARTED |
 | 8 | OS sandbox | NOT STARTED |
-| 9 | Windows UIA layer | NOT STARTED |
+| 9 | Windows UIA backend | **IMPLEMENTED — WINDOWS UNVERIFIED.** 14 tests off-Windows; no input call has ever executed |
 | 10 | Skill system | NOT STARTED |
 | 11 | Model routing | NOT STARTED |
 | 12 | Goals | NOT STARTED |
 | 13 | Telemetry | NOT STARTED |
 | 14 | Voice | NOT STARTED |
+
+Four of fourteen. Nothing above is called VERIFIED unless a test exercises the
+behaviour it claims — item 6 is IMPLEMENTED rather than VERIFIED because its
+authority model is tested and its integration with a real agent loop is not,
+and item 9 cannot be VERIFIED anywhere but Windows.
 
 ## I. Completion criteria
 
