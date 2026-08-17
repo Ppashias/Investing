@@ -589,11 +589,83 @@
 
   /* ── system ─────────────────────────────────────────────────────────── */
 
+  /* One dropdown per role. Worth being clear about why this control is
+     allowed to exist, given the rule that the frontend never widens what
+     JARVIS may do: a model id chooses *who does the thinking*, not what it is
+     permitted to do with the answer. Every tool call the new model makes still
+     goes through ToolExecutor and the permission engine, and is refused in
+     exactly the same cases. There is deliberately no control here for a
+     provider, a base url, a key or a capability — the PATCH schema cannot even
+     express one.
+
+     The options come from the server's list of models a configured provider
+     can actually call, never from a list written here. A dropdown offering
+     something that fails on selection is worse than a short dropdown. */
+  function modelPicker(role, models) {
+    const row = node("div", "kv model-picker");
+    row.appendChild(node("span", null, role.role));
+
+    const select = document.createElement("select");
+    select.className = "model-select";
+    select.id = "model_" + role.role;
+    // Named for a screen reader, since the visible label is a sibling span
+    // rather than a <label for>.
+    select.setAttribute("aria-label", "Model for " + role.role);
+
+    const fallback = models.defaults[role.role] || "";
+    const asDefault = document.createElement("option");
+    asDefault.value = "";
+    asDefault.textContent = "default (" + fallback + ")";
+    select.appendChild(asDefault);
+
+    models.available.forEach((model) => {
+      const option = document.createElement("option");
+      option.value = model.id;
+      // Price is on the label because the expensive choice sits on the
+      // reasoning path, which every turn touches. Finding that out from a bill
+      // is a poor way to find it out.
+      let label = model.id;
+      if (model.runs_locally) label += "  · local";
+      else if (model.input_price_per_mtok) {
+        label += "  · $" + model.input_price_per_mtok + "/Mtok";
+      }
+      option.textContent = label;
+      select.appendChild(option);
+    });
+
+    select.value = role.source === "preference" ? role.model : "";
+
+    select.addEventListener("change", async () => {
+      const wanted = select.value || null;
+      select.disabled = true;
+      try {
+        await api("/system/models", {
+          method: "PATCH",
+          body: { role: role.role, model: wanted },
+        });
+      } catch (err) {
+        // Re-read rather than trusting the optimistic value: a refused change
+        // must not leave the dropdown showing a model that is not in use.
+        pushActivity({
+          kind: "ERROR",
+          summary: "Could not change the model: " + err.message,
+          created_at: new Date().toISOString(),
+        });
+      }
+      select.disabled = false;
+      refreshSystem();
+    });
+
+    row.appendChild(select);
+    return row;
+  }
+
   async function refreshSystem() {
     try {
-      const [status, permissions] = await Promise.all([
+      const [status, permissions, models] = await Promise.all([
         api("/system/status"),
         api("/permissions"),
+        api("/system/models"),
       ]);
       el.systemInfo.replaceChildren();
 
@@ -608,11 +680,8 @@
       });
 
       el.systemInfo.appendChild(node("h4", null, "MODELS BY TASK"));
-      Object.entries(status.settings.models).forEach(([task, model]) => {
-        const kv = node("div", "kv");
-        kv.appendChild(node("span", null, task));
-        kv.appendChild(node("span", null, model));
-        el.systemInfo.appendChild(kv);
+      models.roles.forEach((role) => {
+        el.systemInfo.appendChild(modelPicker(role, models));
       });
 
       el.systemInfo.appendChild(node("h4", null, "PERMISSION DEFAULTS"));

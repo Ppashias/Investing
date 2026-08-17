@@ -689,3 +689,45 @@ input:focus,select:focus{outline:none; border-color:var(--accent-soft)}
    commits closing. */
 .trust-tainted{border-left-color:var(--red); background:rgba(255,93,93,.05)}
 .trust-tainted .trust-tag{color:var(--red)}
+
+/* ── system panel rows ──────────────────────────────────────────────────── */
+/* `.kv` has been used by the System panel since Phase 1 and never had a rule,
+   so every row rendered as two spans jammed together: "READALLOW",
+   "Anthropic (Claude)configured". Noticed only when the model dropdowns landed
+   beside them and the panel got looked at properly. Label left, value right,
+   which is what the markup always meant. */
+.kv{
+  display:flex; align-items:baseline; justify-content:space-between;
+  gap:12px; font-size:11px; line-height:1.5;
+}
+/* The nowrap goes on the *value*, not the label. A grant scope can be an
+   entire URL, and holding that side rigid squeezed the value to nothing —
+   rendering "ALLOW" one letter per line. The label is the side that can
+   afford to wrap. */
+.kv > span:first-child{color:var(--muted); min-width:0; word-break:break-word}
+.kv > span:last-child{color:var(--text); text-align:right; white-space:nowrap}
+
+/* ── model pickers ──────────────────────────────────────────────────────── */
+/* A real <select>, not a bespoke listbox. The native control already handles
+   keyboard, screen readers and the small-screen case, and a hand-rolled
+   replacement would trade all three for a nicer arrow. Styled to sit in the
+   panel rather than to disguise what it is. */
+.model-picker{align-items:center}
+.model-select{
+  /* A fixed basis rather than shrink-to-fit, so three dropdowns of different
+     model-name lengths line up as a column instead of stepping raggedly. */
+  flex:0 0 62%; min-width:0;
+  background:var(--sunk); color:var(--text);
+  border:1px solid var(--border); border-radius:3px;
+  padding:4px 7px; font:inherit; font-size:11px;
+  cursor:pointer;
+}
+.model-select:hover:not(:disabled){border-color:var(--border-hot)}
+.model-select:focus-visible{outline:1px solid var(--accent); outline-offset:1px}
+/* Disabled while a change is in flight, so a second selection cannot race the
+   first and leave the panel disagreeing with the server. */
+.model-select:disabled{opacity:.5; cursor:progress}
+/* The dropdown itself is painted by the OS, which does not inherit the page
+   palette — set both so the open list is not black-on-black or white-on-white
+   depending on the platform. */
+.model-select option{background:var(--card); color:var(--text)}

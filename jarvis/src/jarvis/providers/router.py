@@ -115,14 +115,43 @@ class ModelRouter:
     def __init__(self, registry: ProviderRegistry, settings: Settings) -> None:
         self.registry = registry
         self.settings = settings
+        #: User-chosen models, by task class. Empty until
+        #: :mod:`jarvis.providers.preferences` loads them at startup or a
+        #: change is made from the console. Deliberately a *narrowing* of which
+        #: model within an already-chosen provider — see `_resolve_model`,
+        #: which is where an override that names another vendor's model is
+        #: discarded rather than passed through.
+        self._overrides: dict[TaskClass, str] = {}
 
-    def _model_for(self, task_class: TaskClass) -> str:
+    def set_overrides(self, overrides: dict[TaskClass, str]) -> None:
+        """Replace the override set wholesale.
+
+        Replace rather than merge, so clearing a role in the console clears it
+        here. A merge would leave a preference the user believes they removed
+        still in force, which is the worst kind of setting.
+        """
+        self._overrides = dict(overrides)
+
+    def configured_model(self, task_class: TaskClass) -> str:
+        """What ``.env`` says, ignoring any preference.
+
+        The floor a cleared preference returns to, and what the console shows
+        as the default beside a user's choice.
+        """
         return {
             TaskClass.REASONING: self.settings.model_reasoning,
             TaskClass.CONVERSATION: self.settings.model_conversation,
             TaskClass.FAST: self.settings.model_fast,
             TaskClass.STRUCTURED: self.settings.model_conversation,
         }[task_class]
+
+    def _model_for(self, task_class: TaskClass) -> str:
+        # STRUCTURED has no control of its own and follows conversation, here
+        # as in the configured case — otherwise choosing a conversation model
+        # would silently leave JSON work on the .env default.
+        if task_class is TaskClass.STRUCTURED:
+            task_class = TaskClass.CONVERSATION
+        return self._overrides.get(task_class) or self.configured_model(task_class)
 
     def select(
         self,

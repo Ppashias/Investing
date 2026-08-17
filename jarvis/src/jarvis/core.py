@@ -183,6 +183,13 @@ class JarvisCore:
             user = await self.ensure_default_user(session)
             await seed_default_grants(session, user.id)
             await self._bootstrap_obsidian(session, user.id)
+            # The router is built before the database is readable, so a model
+            # the user chose in the console is stored but not in force until
+            # this runs. Without it the preference would appear to survive a
+            # restart in the UI while every turn quietly used the .env default.
+            from jarvis.providers.preferences import apply_to, stored
+
+            apply_to(self.router, stored(user))
             await session.commit()
 
         log.info(

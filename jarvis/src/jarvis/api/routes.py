@@ -13,7 +13,7 @@ from typing import Annotated, Any, Literal
 
 from fastapi import APIRouter, Body, Depends, HTTPException, Query, status
 from fastapi.responses import StreamingResponse
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 
 from jarvis.activity.service import ActivityService
 from jarvis.api.deps import AuthDep, CoreDep, SessionDep, UserDep
@@ -629,6 +629,92 @@ async def system_telemetry(
 @system_router.get("/status")
 async def system_status(core: CoreDep, _: AuthDep) -> dict[str, Any]:
     return core.status()
+
+
+class SetModelRequest(BaseModel):
+    """One role at a time.
+
+    Deliberately not a bulk write of all three: a partial failure across three
+    roles has to either half-apply or be rolled back, and neither is worth the
+    round trip saved. The console changes one dropdown at a time anyway.
+
+    Note what this schema *cannot* express. There is no provider field, no base
+    url, no api key, and no capability — the only thing a caller may say is
+    which known model handles which role. That is the shape of the frontend
+    rule, enforced by the type rather than by a check somebody has to remember.
+    """
+
+    #: Extra fields are refused rather than dropped. Pydantic's default would
+    #: silently ignore a `provider` or `base_url` somebody tried to smuggle in
+    #: and return 200, which reads to the caller as though it worked. On this
+    #: endpoint in particular the honest answer to "can I also set that?" is a
+    #: 422, not a success that quietly did something narrower.
+    model_config = ConfigDict(extra="forbid")
+
+    role: Literal["REASONING", "CONVERSATION", "FAST"]
+    #: ``None`` clears the preference, returning the role to its .env default.
+    model: str | None = None
+
+
+@system_router.get("/models")
+async def system_models(
+    core: CoreDep, user: UserDep, _: AuthDep
+) -> dict[str, Any]:
+    """What each role uses, and what it could use.
+
+    The list comes from the provider registry, so it contains only models a
+    configured provider can actually call. An option that fails when selected
+    would be worse than a shorter list.
+    """
+    from jarvis.providers import preferences
+
+    return {
+        "roles": [c.describe() for c in preferences.current(user, core.router)],
+        "available": preferences.selectable_models(core.providers),
+        "defaults": {
+            role.value: core.router.configured_model(role)
+            for role in preferences.SELECTABLE_ROLES
+        },
+    }
+
+
+@system_router.patch("/models")
+async def set_system_model(
+    request: SetModelRequest,
+    core: CoreDep,
+    session: SessionDep,
+    user: UserDep,
+    _: AuthDep,
+) -> dict[str, Any]:
+    """Point a role at a different model.
+
+    Not a permission change: a model id selects who does the thinking, and
+    every tool call the new model makes still goes through ToolExecutor and the
+    permission engine unchanged. Recorded all the same — it is the sort of
+    thing worth being able to find in a log when a bill looks surprising.
+    """
+    from jarvis.providers import preferences
+    from jarvis.providers.router import TaskClass
+
+    try:
+        choice = preferences.set_model(
+            user,
+            TaskClass(request.role),
+            request.model,
+            registry=core.providers,
+            router=core.router,
+        )
+    except preferences.UnknownModel as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+    await ActivityService(session).record(
+        ActivityKind.REQUEST_COMPLETED,
+        summary=f"Model for {choice.role} set to {choice.model}",
+        actor="user",
+        status="OK",
+    )
+    await session.commit()
+    return choice.describe()
 
 
 @system_router.get("/prompt")
