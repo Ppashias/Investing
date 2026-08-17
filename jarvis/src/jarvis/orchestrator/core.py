@@ -145,6 +145,11 @@ class Orchestrator:
             ),
             activity=self._activity(session),
             timeout_seconds=self.tool_timeout_seconds,
+            # The stop object lives on ComputerService because that is where it
+            # was first needed, but what it governs is every tool. Reached
+            # rather than moved so the computer API that engages and releases
+            # it keeps working unchanged.
+            emergency_stop=getattr(self.computer, "emergency_stop", None),
         )
 
     def _build_pipeline(self, activity: ActivityService) -> Pipeline:

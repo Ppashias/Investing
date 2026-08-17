@@ -80,6 +80,7 @@ class ToolExecutor:
         confirmations: ConfirmationService,
         activity: ActivityService,
         timeout_seconds: float = 30.0,
+        emergency_stop: Any = None,
     ) -> None:
         self.session = session
         self.registry = registry
@@ -87,6 +88,11 @@ class ToolExecutor:
         self.confirmations = confirmations
         self.activity = activity
         self.timeout_seconds = timeout_seconds
+        #: The stop latch, checked before every tool. Optional so a
+        #: hand-assembled executor still works; the orchestrator always
+        #: supplies it, and ``test_the_orchestrator_wires_the_emergency_stop``
+        #: pins that.
+        self.emergency_stop = emergency_stop
 
     # ── public API ───────────────────────────────────────────────────────────
 
@@ -113,6 +119,7 @@ class ToolExecutor:
             # with the raw arguments because the tool was not yet known; this
             # is the first moment it is, and nothing has flushed since.
             record.arguments = tool.for_audit(call.arguments)
+            self._check_emergency_stop(tool, record, ctx)
             self._validate_arguments(tool, call.arguments)
             decision = await self._authorise(tool, call, ctx, record)
             outcome = await self._invoke(tool, call, ctx, record, decision)
@@ -165,6 +172,56 @@ class ToolExecutor:
             )
 
     # ── stages ───────────────────────────────────────────────────────────────
+
+    #: Tools that still answer while the stop is engaged.
+    #:
+    #: Read-only status reporting, and only that. A stop that also silenced
+    #: "why is everything refusing?" would leave the user with a system that
+    #: had stopped for reasons it would not tell them — and the reason it
+    #: stopped is exactly what they need in order to decide whether to release
+    #: it. Nothing here touches the world; each is a pure report of JARVIS's
+    #: own state.
+    STOP_EXEMPT = frozenset({"computer_status", "browser_status", "get_current_time"})
+
+    def _check_emergency_stop(
+        self, tool: Tool, record: ToolExecution, ctx: ToolContext
+    ) -> None:
+        """Refuse everything while the stop is engaged.
+
+        This used to live in ``ActionExecutor``, which meant it stopped mouse,
+        keyboard, filesystem and terminal — and did not stop the browser, the
+        Obsidian writers, or anything else with reach. "Stop" that leaves a
+        browser able to submit a form is not a stop.
+
+        Checked here because here is the one place every tool passes, and
+        *before* the permission decision on purpose: a stopped system should
+        not be asking the user to approve things it is not going to run.
+        """
+        stop = self.emergency_stop
+        if stop is None or not getattr(stop, "engaged", False):
+            return
+        if tool.name in self.STOP_EXEMPT:
+            return
+        state = stop.state() if hasattr(stop, "state") else None
+        reason = getattr(state, "reason", "") or "the emergency stop is engaged"
+        # FAILED rather than a status of its own, matching the permission-deny
+        # path immediately below. ``permission_decision`` carries the DENY, and
+        # the reason is on the row — a sixth ExecutionStatus would be a schema
+        # migration for something the existing two columns already say.
+        record.status = ExecutionStatus.FAILED
+        record.permission_decision = PermissionMode.DENY
+        record.error = f"Emergency stop engaged: {reason}"
+        log.warning("emergency_stop_blocked_tool", tool=tool.name, reason=reason)
+        raise PermissionDeniedError(
+            f"Emergency stop engaged: {reason}",
+            capability=tool.capability.value,
+            tool=tool.name,
+            reason=reason,
+            user_message=(
+                f"The emergency stop is engaged ({reason}). Nothing will run "
+                "until it is released."
+            ),
+        )
 
     @staticmethod
     def _validate_arguments(tool: Tool, arguments: dict[str, Any]) -> None:

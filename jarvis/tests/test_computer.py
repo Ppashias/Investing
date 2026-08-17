@@ -629,3 +629,122 @@ def test_unavailable_backend_refuses_rather_than_faking() -> None:
     ):
         with pytest.raises(BackendUnavailable):
             call()
+
+
+# ── the stop covers every tool, not only the machine (Phase D, item 3) ───────
+#
+# It used to be checked in ``ActionExecutor``, so it stopped mouse, keyboard,
+# filesystem and terminal — and did not stop the browser, the Obsidian writers,
+# or anything else with reach. A "stop" that leaves a browser able to submit a
+# form is not a stop. It now sits in ``ToolExecutor``, which is the one place
+# every tool passes.
+
+
+async def _stopped_executor(core, session, user, *, engaged: bool = True):
+    from jarvis.tools.base import ToolContext
+
+    if engaged:
+        core.computer.emergency_stop.engage(reason="user pressed stop")
+    else:
+        core.computer.emergency_stop.release()
+    executor = core.orchestrator._make_executor(session)
+    ctx = ToolContext(user_id=user.id, session=session, request_id="req_stop",
+                      extras={"computer": core.computer, "browser": core.browser,
+                              "activity": core.orchestrator._activity(session)})
+    return executor, ctx
+
+
+@pytest.mark.parametrize(
+    "name,args",
+    [
+        ("create_task", {"title": "something"}),
+        ("browser_open", {"url": "https://example.com"}),
+        ("browser_pages", {}),
+        ("list_tasks", {}),
+    ],
+)
+async def test_the_stop_refuses_every_capability(core, session, user, name, args) -> None:
+    """Named individually rather than counted.
+
+    A count passes when one tool is swapped for another, and the point is that
+    reach beyond the machine — the browser especially — is now covered.
+    """
+    from jarvis.errors import PermissionDeniedError
+    from jarvis.tools.executor import ToolCall
+
+    executor, ctx = await _stopped_executor(core, session, user)
+    try:
+        with pytest.raises(PermissionDeniedError) as caught:
+            await executor.execute(ToolCall(id="t", name=name, arguments=args), ctx)
+        assert "emergency stop" in str(caught.value).lower()
+    finally:
+        core.computer.emergency_stop.release()
+
+
+async def test_the_stop_still_lets_jarvis_say_why(core, session, user) -> None:
+    """Status reporting survives, or the user cannot find out what stopped.
+
+    The reason it stopped is exactly what they need in order to decide whether
+    to release it, so silencing that would leave them with a system that had
+    stopped for reasons it would not tell them.
+    """
+    from jarvis.tools.executor import ToolCall
+
+    executor, ctx = await _stopped_executor(core, session, user)
+    try:
+        outcome = await executor.execute(
+            ToolCall(id="t", name="computer_status", arguments={}), ctx
+        )
+        assert outcome.result.is_error is False
+    finally:
+        core.computer.emergency_stop.release()
+
+
+async def test_releasing_the_stop_restores_everything(core, session, user) -> None:
+    from jarvis.tools.executor import ToolCall
+
+    executor, ctx = await _stopped_executor(core, session, user, engaged=False)
+    outcome = await executor.execute(
+        ToolCall(id="t", name="list_tasks", arguments={}), ctx
+    )
+    assert outcome.result.is_error is False
+
+
+async def test_the_stop_refuses_before_asking_for_approval(core, session, user) -> None:
+    """A stopped system must not queue confirmations.
+
+    Asking someone to approve an action that will not run either way trains
+    them that approvals are ceremonial — the same argument that made
+    ``_runnable_here`` withhold computer tools with no display.
+    """
+    from jarvis.db.models import Confirmation
+    from jarvis.errors import PermissionDeniedError
+    from jarvis.tools.executor import ToolCall
+    from sqlalchemy import select
+
+    executor, ctx = await _stopped_executor(core, session, user)
+    try:
+        before = len((await session.execute(select(Confirmation))).scalars().all())
+        with pytest.raises(PermissionDeniedError):
+            await executor.execute(
+                ToolCall(id="t", name="browser_click",
+                         arguments={"page_id": "pg_1", "element_id": "el_1"}), ctx
+            )
+        after = len((await session.execute(select(Confirmation))).scalars().all())
+        assert after == before, "a stopped system queued a confirmation"
+    finally:
+        core.computer.emergency_stop.release()
+
+
+def test_the_orchestrator_wires_the_emergency_stop() -> None:
+    """The extras-contract lesson, applied to the stop.
+
+    The check is worthless if the object never reaches the executor, and a
+    test that builds its own executor would not notice.
+    """
+    import inspect
+
+    from jarvis.orchestrator.core import Orchestrator
+
+    source = inspect.getsource(Orchestrator._make_executor)
+    assert "emergency_stop=" in source

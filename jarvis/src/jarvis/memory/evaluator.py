@@ -148,12 +148,20 @@ class MemoryCandidate:
         project_id: str | None,
         conversation_id: str | None,
         status: MemoryStatus,
+        tainted: bool = False,
     ) -> MemoryDraft:
         return MemoryDraft(
             content=self.content,
             subject=self.subject,
             type=self.type,
+            # Always CONVERSATION: this candidate was extracted from an
+            # exchange, whatever the exchange itself had read. ``tainted`` is
+            # therefore carried separately rather than inferred from the
+            # source, because ``MemorySource.is_external`` answers "where did
+            # this text come from" and the question here is "what did the turn
+            # that produced it touch".
             source=MemorySource.CONVERSATION,
+            tainted=tainted,
             confidence=self.confidence,
             importance=self.importance,
             project_id=project_id,
@@ -216,7 +224,23 @@ class MemoryEvaluator:
         conversation_id: str | None = None,
         project_id: str | None = None,
         request_id: str | None = None,
+        tainted: bool = False,
     ) -> EvaluationResult:
+        """Extract durable facts from one exchange.
+
+        ``tainted`` says the turn read something JARVIS did not author — a web
+        page, a document, a note. It is not a property of the *text* handed in
+        here, which is why it cannot be inferred: by this point the page has
+        been through the model and comes back as JARVIS's own prose, indistinguishable
+        from a fact the user stated. Without the caller saying so, a poisoned
+        page becomes an untainted permanent memory, and
+        :func:`jarvis.memory.retrieval` propagates taint *from* stored rows, so
+        a wrong flag at write time is never corrected at read time.
+
+        Defaults to ``False`` so a hand-built caller does not silently claim a
+        turn was clean — but every caller inside JARVIS passes it, and
+        ``test_the_memory_stage_passes_the_turn_taint`` pins the one that matters.
+        """
         if self.capture_mode == "off":
             return EvaluationResult(skipped_reason="capture_mode=off")
         if self.router is None:
@@ -237,6 +261,7 @@ class MemoryEvaluator:
             conversation_id=conversation_id,
             project_id=project_id,
             request_id=request_id,
+            tainted=tainted,
         )
 
     # ── extraction ───────────────────────────────────────────────────────────
@@ -322,6 +347,7 @@ class MemoryEvaluator:
         conversation_id: str | None,
         project_id: str | None,
         request_id: str | None,
+        tainted: bool = False,
     ) -> EvaluationResult:
         result = EvaluationResult(candidates=list(candidates))
         service = MemoryService(
@@ -349,17 +375,30 @@ class MemoryEvaluator:
             # An inferred memory is capped below what an explicit instruction
             # earns, whatever the model claimed about its own certainty.
             confidence = min(candidate.confidence, CONFIDENCE_INFERRED + 0.2)
+            # A tainted turn never captures silently, whatever the mode says.
+            # ``auto`` is a statement about trusting JARVIS's own judgement on
+            # an ordinary conversation; it is not consent for a web page to
+            # write itself into permanent memory while nobody is looking. The
+            # taint flag alone would make the permission engine escalate
+            # *later* actions, which is worth having and is not the same as
+            # keeping the claim out of memory in the first place.
             status = (
                 MemoryStatus.PROPOSED
-                if self.capture_mode == "ask"
+                if self.capture_mode == "ask" or tainted
                 else MemoryStatus.ACTIVE
             )
             draft = candidate.to_draft(
                 project_id=project_id,
                 conversation_id=conversation_id,
                 status=status,
+                tainted=tainted,
             )
             draft.confidence = confidence
+            if tainted:
+                # Provenance, so "why is this memory distrusted?" is answerable
+                # from the row rather than by replaying the turn it came from.
+                draft.meta = {**draft.meta, "tainted_turn": True,
+                              "tainted_request_id": request_id}
 
             outcome = await service.create(
                 user_id, draft, actor="evaluator", request_id=request_id,

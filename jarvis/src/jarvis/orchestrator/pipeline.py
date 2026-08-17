@@ -75,6 +75,27 @@ class PipelineContext:
     stage_timings: dict[str, float] = field(default_factory=dict)
     warnings: list[str] = field(default_factory=list)
 
+    @property
+    def tainted(self) -> bool:
+        """Is anything untrusted in scope for this turn?
+
+        The union of the two sources, in one place. They are stored separately
+        so neither can be mistaken for the other — ``tool_taint`` is what this
+        turn *read*, the bundle's flag is what was *retrieved* into context —
+        but every consumer wants the union, and two consumers computing it
+        independently is how one of them ends up not computing it at all. That
+        is exactly what happened: the memory stage never asked, so an exchange
+        that had read a poisoned page was captured as an untainted permanent
+        memory.
+        """
+        return bool(
+            self.tool_taint
+            or (
+                self.context_bundle is not None
+                and getattr(self.context_bundle, "tainted", False)
+            )
+        )
+
     def set_conversation(self, conversation: Conversation) -> None:
         self.conversation = conversation
         self.conversation_id = conversation.id

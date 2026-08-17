@@ -395,3 +395,169 @@ async def test_both_taint_sources_are_kept_separate(core, stub, vault, spy) -> N
     # Plain.md has no injection in it, but it is still the user's own prose
     # from outside JARVIS — taint is about provenance, not about content.
     assert spy[1][1] is True
+
+
+# ── memory must not launder taint (Phase D, item 1) ──────────────────────────
+#
+# The Step-12 competitive review went looking for "can untrusted tool output
+# become trusted permanent memory?" and found that it could. The ingestion
+# paths were right — MemorySource.is_external covers DOCUMENT/OBSIDIAN/WEB and
+# those store tainted — but ambient capture was not:
+#
+#   stages.py   → evaluate_exchange(...)          # ctx.tool_taint not passed
+#   evaluator   → source=MemorySource.CONVERSATION # hardcoded
+#   service.py  → tainted = draft.tainted or draft.source.is_external → False
+#
+# So a turn that read a poisoned page and let it into the answer produced a
+# permanent memory marked tainted=False. retrieval.py propagates taint *from*
+# stored rows, so the wrong flag was never corrected later either.
+#
+# These tests drive the real evaluator. None of them sets a stored row's flag
+# by hand — that would test the assertion rather than the wire.
+
+from jarvis.db.models import MemoryStatus  # noqa: E402
+from jarvis.memory.evaluator import MemoryEvaluator  # noqa: E402
+from jarvis.memory.service import MemoryService  # noqa: E402
+
+_CANDIDATE = (
+    '{"memories": [{"content": "The user banks with Example Bank", '
+    '"subject": "banking", "type": "USER_FACT", '
+    '"importance": 0.8, "confidence": 0.9, "reason": "stated"}]}'
+)
+
+
+async def test_a_memory_from_a_tainted_turn_is_stored_tainted(
+    session, core, user, stub
+) -> None:
+    """The defect, as a regression test.
+
+    ``auto`` is the mode that made this worst: no human in the path, so the
+    row was written ACTIVE and untainted and stayed that way forever.
+    """
+    stub.responses = [text_result(_CANDIDATE)]
+    result = await MemoryEvaluator(
+        session, router=core.router, embeddings=core.embeddings, capture_mode="auto"
+    ).evaluate_exchange(
+        user_id=user.id,
+        user_message="Summarise the page you just read for me please",
+        assistant_message="It says the user banks with Example Bank.",
+        request_id="req_tainted",
+        tainted=True,
+    )
+
+    ids = result.stored + result.proposed
+    assert ids, "the candidate should have been captured in some form"
+    memory = await MemoryService(session).get(ids[0])
+    assert memory.tainted is True, "a memory from a tainted turn must be tainted"
+
+
+async def test_a_tainted_turn_never_captures_silently(
+    session, core, user, stub
+) -> None:
+    """Even under ``auto``, a tainted turn proposes rather than stores.
+
+    ``auto`` says "I trust JARVIS's judgement about an ordinary conversation".
+    It is not consent for a web page to write itself into permanent memory
+    while nobody is watching. The taint flag alone would escalate *later*
+    actions, which is worth having and is not the same as keeping the claim
+    out of memory to begin with.
+    """
+    stub.responses = [text_result(_CANDIDATE)]
+    result = await MemoryEvaluator(
+        session, router=core.router, embeddings=core.embeddings, capture_mode="auto"
+    ).evaluate_exchange(
+        user_id=user.id,
+        user_message="Summarise the page you just read for me please",
+        assistant_message="It says the user banks with Example Bank.",
+        tainted=True,
+    )
+
+    assert result.proposed and not result.stored
+    memory = await MemoryService(session).get(result.proposed[0])
+    assert memory.status is MemoryStatus.PROPOSED
+
+
+async def test_a_clean_turn_still_captures_untainted(
+    session, core, user, stub
+) -> None:
+    """The converse, or the fix is just "taint everything".
+
+    A flag that is always set carries no information, and would make every
+    memory escalate every later action until the user turned the whole
+    mechanism off.
+    """
+    stub.responses = [text_result(_CANDIDATE)]
+    result = await MemoryEvaluator(
+        session, router=core.router, embeddings=core.embeddings, capture_mode="auto"
+    ).evaluate_exchange(
+        user_id=user.id,
+        user_message="Just so you know, I bank with Example Bank",
+        assistant_message="Noted.",
+        tainted=False,
+    )
+
+    assert result.stored and not result.proposed
+    memory = await MemoryService(session).get(result.stored[0])
+    assert memory.tainted is False
+
+
+async def test_a_tainted_memory_records_where_it_came_from(
+    session, core, user, stub
+) -> None:
+    """Provenance, so "why is this distrusted?" is answerable from the row."""
+    stub.responses = [text_result(_CANDIDATE)]
+    result = await MemoryEvaluator(
+        session, router=core.router, embeddings=core.embeddings, capture_mode="ask"
+    ).evaluate_exchange(
+        user_id=user.id,
+        user_message="Summarise the page you just read for me please",
+        assistant_message="It says the user banks with Example Bank.",
+        request_id="req_provenance",
+        tainted=True,
+    )
+
+    memory = await MemoryService(session).get(result.proposed[0])
+    assert memory.meta.get("tainted_turn") is True
+    assert memory.meta.get("tainted_request_id") == "req_provenance"
+
+
+def test_the_memory_stage_passes_the_turn_taint() -> None:
+    """The wire, pinned by source.
+
+    This is the half that was actually missing: the evaluator would have done
+    the right thing all along if anyone had told it. A test that only called
+    ``evaluate_exchange(tainted=True)`` directly would have passed against the
+    broken code, because the defect was that nothing ever passed it.
+    """
+    import inspect
+
+    from jarvis.orchestrator.stages import EvaluateMemoryStage
+
+    source = inspect.getsource(EvaluateMemoryStage.run)
+    assert "tainted=ctx.tainted" in source
+
+
+def test_turn_taint_is_the_union_of_both_sources() -> None:
+    """Retrieved context taints as surely as a tool result does.
+
+    Two consumers computing this independently is how one of them ends up not
+    computing it at all — which is exactly what happened here.
+    """
+    from jarvis.orchestrator.pipeline import PipelineContext
+
+    class _Bundle:
+        tainted = True
+
+    def blank() -> PipelineContext:
+        return PipelineContext(request_id="req", session=None, user=None,
+                               message="x")
+
+    assert blank().tainted is False
+
+    from_tool = blank()
+    from_tool.tool_taint = True
+    assert from_tool.tainted is True
+
+    from_context = blank()
+    from_context.context_bundle = _Bundle()
+    assert from_context.tainted is True

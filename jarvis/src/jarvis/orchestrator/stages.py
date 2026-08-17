@@ -386,7 +386,7 @@ class ExecuteStage(Stage):
                 # context bundle alone, so a note read in step one left step
                 # two untainted and a page saying "now delete everything"
                 # reached a write that had never met a human.
-                tainted=self._tainted(ctx),
+                tainted=ctx.tainted,
                 extras={
                     "embeddings": self.embeddings,
                     "project_id": ctx.project_id,
@@ -440,17 +440,6 @@ class ExecuteStage(Stage):
                 )
             )
         return results
-
-    @staticmethod
-    def _tainted(ctx: PipelineContext) -> bool:
-        """Is anything untrusted in scope for the next tool call?"""
-        return bool(
-            ctx.tool_taint
-            or (
-                ctx.context_bundle is not None
-                and getattr(ctx.context_bundle, "tainted", False)
-            )
-        )
 
     @staticmethod
     async def _persist_assistant_turn(ctx: PipelineContext, completion: Any) -> None:
@@ -594,6 +583,12 @@ class EvaluateMemoryStage(Stage):
                 conversation_id=ctx.conversation_id,
                 project_id=ctx.project_id,
                 request_id=ctx.request_id,
+                # The turn's taint, not the message's. By the time the answer
+                # reaches here a page JARVIS read has been through the model
+                # and comes back as JARVIS's own prose — nothing about the
+                # text still says where it came from, so this is the only
+                # place the fact is still known.
+                tainted=ctx.tainted,
             )
         except Exception as exc:
             log.warning("memory_evaluation_failed", error=str(exc))
